@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM node:22-alpine AS frontend
+FROM node:22-slim AS frontend
 WORKDIR /frontend
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
@@ -16,27 +16,19 @@ RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --no-dev --no-ins
 
 FROM python:3.12-slim AS runtime
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
-RUN useradd --create-home --uid 10001 app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 app
 WORKDIR /app
 COPY --from=backend /app/.venv /app/.venv
 COPY app ./app
 COPY --from=frontend /frontend/dist /app/dist
-COPY ops/render/start.py ./ops/render/start.py
+COPY ops/render/start.py ops/render/build_seed.py ./ops/render/
 RUN python -m compileall -q /app/app /app/ops/render \
     && mkdir -p /app/seed \
-    && python - <<'PY'
-from contextlib import closing
-from app.db import SCHEMA, connect, transaction
-from app.seed import seed
-
-with closing(connect("/app/seed/factory.sqlite3")) as db:
-    db.execute("PRAGMA journal_mode=WAL")
-    db.executescript(SCHEMA)
-    with transaction(db):
-        seed(db)
-    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    db.execute("VACUUM")
-PY
+    && python /app/ops/render/build_seed.py \
+    && chmod 644 /app/seed/factory.sqlite3
 USER app
 EXPOSE 10000
 CMD ["python", "/app/ops/render/start.py"]
