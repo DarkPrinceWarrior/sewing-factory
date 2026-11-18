@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: sewing-factory
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: FACTORY_DB
+        value: /tmp/factory/factory.sqlite3
