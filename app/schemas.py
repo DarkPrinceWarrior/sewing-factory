@@ -38,6 +38,7 @@ class Report(BaseModel):
     date: date
     stage: Stage
     shift: Literal["day", "evening", "night"] = "day"
+    source_id: Id | None = None
     memo: Memo = ""
     lines: Annotated[list[WorkLine], Field(min_length=1, max_length=100)]
 
@@ -59,14 +60,24 @@ class Receipt(BaseModel):
     date: date
     supplier: Short
     reference: Short
+    target_id: Id | None = None
     memo: Memo = ""
     lines: Annotated[list[ItemLine], Field(min_length=1, max_length=100)]
+
+
+class RawMaterial(BaseModel):
+    name: Short
+    unit: Literal["м", "шт.", "кг", "рул.", "уп.", "компл."] = "м"
+    category: Short = "Сырьё"
+    sku: Annotated[str, StringConstraints(strip_whitespace=True, max_length=60)] = ""
+    price: Money = Decimal("0")
 
 
 class Sale(BaseModel):
     warehouse_id: Id | None = None
     payment: Literal["card", "cash", "transfer"]
     request_key: Annotated[str, Field(pattern=r"^[a-zA-Z0-9_-]{16,80}$")]
+    memo: Memo = ""
     lines: Annotated[list[ItemLine], Field(min_length=1, max_length=100)]
 
 
@@ -98,7 +109,7 @@ class MaterialNorm(BaseModel):
 
 
 class Recipe(BaseModel):
-    norms: Annotated[list[MaterialNorm], Field(min_length=1, max_length=120)]
+    norms: Annotated[list[MaterialNorm], Field(max_length=120)] = []
     cut: Money
     sew: Money
     pack: Money

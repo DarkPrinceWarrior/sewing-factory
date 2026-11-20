@@ -37,12 +37,14 @@ const operations = {
   receipt: 'Поступление'
 }
 const sum = (rows, key) => rows.reduce((total, row) => total + (row[key] || 0), 0)
+const warehouseLabel = (name, city) => [name, city].filter(Boolean).join(' · ')
 
 function shiftReportColumns(overview = false) {
   const columns = [
     {
       label: overview ? 'Документ' : 'Документ / дата',
       width: overview ? '24%' : '23%',
+      primary: true,
       cell: r => (
         <>
           <a className="nowrap" href={href('/reports/' + r.id)}>{r.code}</a>
@@ -93,12 +95,16 @@ function shiftReportColumns(overview = false) {
 }
 
 function OutputChart({ data }) {
+  const draftStages = data.draft_stages || []
   const rows = production.map(([key]) => {
     const found = data.stages.find(row => row.stage === key)
-    return [key, found?.quantity || 0, found?.documents || 0]
+    const draft = draftStages.find(row => row.stage === key)
+    return [key, found?.quantity || 0, found?.documents || 0, draft?.quantity || 0, draft?.documents || 0]
   })
   const totalOutput = sum(data.stages, 'quantity')
   const totalDocs = sum(data.stages, 'documents')
+  const totalDraftOutput = sum(draftStages, 'quantity')
+  const totalDraftDocs = sum(draftStages, 'documents')
   const max = Math.max(1, ...rows.map(([, n]) => n))
 
   return (
@@ -109,16 +115,33 @@ function OutputChart({ data }) {
           <span>
             {totalOutput > 0
               ? 'Итого: ' + qty(totalOutput) + ' компл.'
-              : 'Выработка ещё не проведена'}
+              : totalDraftOutput > 0
+                ? 'В черновиках: ' + qty(totalDraftOutput) + ' компл.'
+                : 'Выработка ещё не проведена'}
           </span>
         </div>
-        {rows.map(([key, n, docs]) => (
+        {rows.map(([key, n, docs, draftN, draftDocs]) => (
           <div className="bar-row" key={key}>
             <span>{finishedLabels[key]}</span>
             <a
               className="bar-track"
-              href={href(routeWith('/reports', { start: data.day, end: data.day, stage: key, status: 'posted' }))}
-              title={stages[key] + ': ' + qty(n) + ' компл. (отчётов: ' + number(docs) + ')'}
+              href={href(
+                routeWith('/reports', {
+                  start: data.day,
+                  end: data.day,
+                  stage: key,
+                  ...(n > 0 || !draftN ? { status: 'posted' } : { status: 'draft' })
+                })
+              )}
+              title={
+                stages[key] +
+                ': ' +
+                qty(n) +
+                ' компл. (проведено: ' +
+                number(docs) +
+                (draftDocs ? ', в черновиках: ' + qty(draftN) + ' компл.' : '') +
+                ')'
+              }
               aria-label={stages[key] + ': открыть отчёты за ' + dayText(data.day)}
             >
               <div
@@ -126,7 +149,12 @@ function OutputChart({ data }) {
                 style={{ width: (n > 0 ? Math.max(3, (n / max) * 100) : 0) + '%' }}
               />
             </a>
-            <strong className="nowrap">{qty(n)} компл.</strong>
+            <strong className="nowrap">
+              {qty(n)} компл.
+              {draftN > 0 && (
+                <span className="cell-secondary">+{qty(draftN)} черн.</span>
+              )}
+            </strong>
           </div>
         ))}
       </div>
@@ -135,8 +163,10 @@ function OutputChart({ data }) {
         <strong>{money(data.wages)}</strong>
         <small>
           {totalDocs > 0
-            ? 'Проведённых отчётов: ' + number(totalDocs)
-            : 'Проведённых отчётов пока нет'}
+            ? 'Проведённых отчётов: ' + number(totalDocs) + (totalDraftDocs ? ' · черновиков: ' + number(totalDraftDocs) : '')
+            : totalDraftDocs > 0
+              ? 'Черновиков за день: ' + number(totalDraftDocs) + ' (ещё не проведены)'
+              : 'Проведённых отчётов пока нет'}
         </small>
       </div>
     </Card>
@@ -174,10 +204,15 @@ export function Wip({ rows, links = false, showStack = !links }) {
 }
 
 export function Overview() {
-  const { today } = useWorkspace()
+  const { today, settings } = useWorkspace()
   const overview = useFilters('overview', { day: today })
   const day = overview.filters.day
   const request = useRemote('/overview', { day })
+  const minDate = settings?.open_month ? settings.open_month + '-01' : ''
+  const newReportTarget =
+    day && day !== today && (!minDate || day >= minDate) && day <= today
+      ? routeWith('/reports/new', { date: day })
+      : '/reports/new'
 
   return (
     <Page
@@ -195,66 +230,99 @@ export function Overview() {
           {' · фактические результаты смены'}
         </>
       }
-      actions={<Button kind="primary" to="/reports/new">Новый отчёт за смену</Button>}
+      actions={<Button kind="primary" to={newReportTarget}>Новый отчёт за смену</Button>}
     >
       <Guard request={request}>
-        {data => (
-          <>
-            <OutputChart data={data} />
-            <Card
-              title="Отчёты за смену"
-              actions={
-                <Button to={routeWith('/reports', { start: day, end: day, status: 'posted' })}>
-                  Отчёты за выбранный день
-                </Button>
-              }
-            >
-              <Table
-                columns={shiftReportColumns(true)}
-                rows={data.reports}
-                label="Отчёты за смену"
-                empty="За выбранную дату проведённых отчётов нет"
-              />
-            </Card>
-            <div className="grid-two overview-bottom">
+        {data => {
+          const dayReports = data.day_reports ?? data.reports ?? []
+          const dayDrafts = data.day_drafts ?? dayReports.filter(r => r.status === 'draft')
+          const dayDraftQty = sum(dayDrafts, 'quantity')
+          return (
+            <>
+              <OutputChart data={data} />
+              {dayDrafts.length > 0 && (
+                <div className="notice warning version-banner">
+                  <div>
+                    <strong>
+                      За {dayText(day)} есть непроведённые черновики ({number(dayDrafts.length)} шт., {qty(dayDraftQty)} компл.).
+                    </strong>{' '}
+                    В выработке и начислениях смены учитываются только проведённые отчёты.
+                  </div>
+                  <Button
+                    size="small"
+                    to={
+                      dayDrafts.length === 1
+                        ? '/reports/' + dayDrafts[0].id
+                        : routeWith('/reports', { start: day, end: day, status: 'draft' })
+                    }
+                  >
+                    {dayDrafts.length === 1 ? 'Открыть и провести' : 'Открыть черновики'}
+                  </Button>
+                </div>
+              )}
               <Card
-                title={'Незавершённое производство · ' + qty(sum(data.wip, 'quantity')) + ' компл.'}
-                subtitle={'Остаток на ' + dayText(day)}
-                actions={<Button size="small" to="/stock">Открыть склады</Button>}
-              >
-                <Wip rows={data.wip} links showStack />
-              </Card>
-              <Card
-                title="Требует внимания"
+                title="Отчёты за смену"
+                subtitle={
+                  dayReports.length > 0
+                    ? 'Всего за ' + dayText(day) + ': ' + number(dayReports.length) +
+                      (dayDrafts.length > 0 ? ' (в том числе черновиков: ' + number(dayDrafts.length) + ')' : '')
+                    : undefined
+                }
                 actions={
-                  data.pending.total > 0 ? (
-                    <Button size="small" to={routeWith('/reports', { status: 'draft' })}>
-                      Все черновики
-                    </Button>
-                  ) : null
+                  <Button to={routeWith('/reports', { start: day, end: day })}>
+                    Отчёты за выбранный день
+                  </Button>
                 }
               >
-                {data.pending.total ? (
-                  <>
-                    <strong>Черновиков отчётов: {number(data.pending.total)}</strong>
-                    <ul className="attention">
-                      {data.pending.rows.map(r => (
-                        <li key={r.id}>
-                          <a href={href('/reports/' + r.id)}>
-                            {stages[r.stage]} · {r.code}
-                          </a>{' '}
-                          <span className="muted">({dayText(r.date)})</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                ) : (
-                  <p className="muted">Все отчёты проведены — черновиков нет.</p>
-                )}
+                <Table
+                  columns={shiftReportColumns(true)}
+                  rows={dayReports}
+                  label="Отчёты за смену"
+                  empty="За выбранную дату отчётов нет"
+                />
               </Card>
-            </div>
-          </>
-        )}
+              <div className="grid-two overview-bottom">
+                <Card
+                  title={'Незавершённое производство · ' + qty(sum(data.wip, 'quantity')) + ' компл.'}
+                  subtitle={'Остаток на ' + dayText(day)}
+                  actions={<Button size="small" to="/stock">Открыть склады</Button>}
+                >
+                  <Wip rows={data.wip} links showStack />
+                </Card>
+                <Card
+                  title="Требует внимания"
+                  actions={
+                    data.pending.total > 0 ? (
+                      <Button size="small" to={routeWith('/reports', { status: 'draft' })}>
+                        Все черновики
+                      </Button>
+                    ) : null
+                  }
+                >
+                  {data.pending.total ? (
+                    <>
+                      <strong>Черновиков отчётов: {number(data.pending.total)}</strong>
+                      <ul className="attention">
+                        {data.pending.rows.map(r => (
+                          <li key={r.id}>
+                            <a href={href('/reports/' + r.id)}>
+                              {stages[r.stage]} · {r.code}
+                            </a>{' '}
+                            <span className="muted">
+                              ({dayText(r.date)}{r.quantity ? ' · ' + qty(r.quantity) + ' компл.' : ''})
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <p className="muted">Все отчёты проведены — черновиков нет.</p>
+                  )}
+                </Card>
+              </div>
+            </>
+          )
+        }}
       </Guard>
     </Page>
   )
@@ -354,12 +422,33 @@ export function ReportList() {
   )
 }
 
-function initialData(document, today) {
-  if (!document) return { date: today, stage: 'cut', shift: 'day', memo: '', lines: [] }
+function queryInitialDate(today, minDate) {
+  const params = new URLSearchParams(window.location.hash.split('?')[1] || '')
+  const value = params.get('date') || ''
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return today
+  const parsed = new Date(value + 'T00:00:00Z')
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) return today
+  if (value > today) return today
+  if (minDate && value < minDate) return today
+  return value
+}
+
+function initialData(document, today, minDate) {
+  if (!document) {
+    return {
+      date: queryInitialDate(today, minDate),
+      stage: 'cut',
+      shift: 'day',
+      source_id: 1,
+      memo: '',
+      lines: []
+    }
+  }
   return {
     date: document.date,
     stage: document.stage,
     shift: document.shift,
+    source_id: document.source_id || 1,
     memo: document.memo || '',
     lines: document.lines.map(l => ({
       item_id: l.item_id,
@@ -439,6 +528,7 @@ function EditWorkLine({ original, stage, used, items, close, save, remove }) {
               step="1"
               max="100000"
               type="number"
+              inputMode="numeric"
               value={data.quantity}
               onChange={e => change('quantity', e.target.value === '' ? '' : Number(e.target.value))}
             />
@@ -454,6 +544,7 @@ function EditWorkLine({ original, stage, used, items, close, save, remove }) {
                 step="1"
                 max="100000"
                 type="number"
+                inputMode="numeric"
                 value={data.prepared}
                 onChange={e => change('prepared', e.target.value === '' ? '' : Number(e.target.value))}
               />
@@ -589,6 +680,7 @@ function EditAssignment({ original, initialLine = 0, lines, workers, close, save
           >
             <input
               type="number"
+              inputMode="numeric"
               required
               min="1"
               step="1"
@@ -605,7 +697,7 @@ function EditAssignment({ original, initialLine = 0, lines, workers, close, save
   )
 }
 
-function MaterialRows({ document }) {
+function MaterialRows({ document, sourceId = 1, sourceLabel = 'Склад сырья · Иваново' }) {
   const rows = document.lines.flatMap(l =>
     l.materials.map(m => ({ ...m, product: itemText(l), count: l.quantity, key: l.id + '-' + m.item_id }))
   )
@@ -617,9 +709,14 @@ function MaterialRows({ document }) {
   const summaryRows = [...totals.values()]
   const isDraft = document.status === 'draft'
   const shortages = isDraft ? summaryRows.filter(r => r.available < r.quantity) : []
+  const materialHref = itemId => (sourceId === 1 ? '/stock/1/items/' + itemId : '/stock/' + sourceId)
 
   const columns = [
-    { label: 'Материал', cell: r => <a href={href('/stock/1/items/' + r.item_id)}>{r.name}</a> },
+    {
+      label: 'Материал',
+      primary: true,
+      cell: r => <a href={href(materialHref(r.item_id))}>{r.name}</a>
+    },
     { label: 'Изделие', cell: r => r.product },
     { label: 'Норма на комплект', align: 'right', cell: r => qty(r.norm) + ' ' + r.unit },
     { label: 'Комплектов', align: 'right', cell: r => qty(r.count) },
@@ -643,6 +740,12 @@ function MaterialRows({ document }) {
 
   return (
     <>
+      <div className="inline-note info">
+        Склад списания сырья:{' '}
+        <a href={href('/stock/' + sourceId)}>
+          <strong>{sourceLabel}</strong>
+        </a>
+      </div>
       <Table
         label="Списание материалов"
         rows={rows}
@@ -654,19 +757,19 @@ function MaterialRows({ document }) {
         <div className={shortages.length > 0 ? 'notice warning' : 'inline-note'}>
           {shortages.length > 0 && (
             <p className="shortage-heading">
-              <strong>Недостаточно сырья на складе для проведения отчёта:</strong>
+              <strong>Недостаточно сырья на складе «{sourceLabel}» для проведения отчёта:</strong>
             </p>
           )}
           {summaryRows.map(r => (
             <div key={r.item_id}>
               <strong>
-                <a href={href('/stock/1/items/' + r.item_id)}>{r.name}</a>: {qty(r.quantity)} {r.unit}.
+                <a href={href(materialHref(r.item_id))}>{r.name}</a>: {qty(r.quantity)} {r.unit}.
               </strong>
               {isDraft && (
                 <span className={r.available < r.quantity ? ' negative' : ''}>
                   {r.available >= r.quantity
-                    ? ' После списания останется ' + qty(r.available - r.quantity)
-                    : ' На складе ' + qty(r.available) + ', не хватает ' + qty(r.quantity - r.available)}{' '}
+                    ? ' На складе «' + sourceLabel + '» останется ' + qty(r.available - r.quantity)
+                    : ' На складе «' + sourceLabel + '» ' + qty(r.available) + ', не хватает ' + qty(r.quantity - r.available)}{' '}
                   {r.unit}.
                 </span>
               )}
@@ -685,6 +788,7 @@ export function DocumentHistory({ document, hideCost, defaultOpen = false }) {
   const movementColumns = [
     {
       label: 'Операция',
+      primary: true,
       cell: r => operations[r.operation] || r.operation
     },
     { label: 'Склад', cell: r => r.warehouse },
@@ -711,7 +815,7 @@ export function DocumentHistory({ document, hideCost, defaultOpen = false }) {
             rows={document.events || []}
             empty="Событий пока нет"
             columns={[
-              { label: 'Действие', cell: r => events[r.action] || r.action },
+              { label: 'Действие', primary: true, cell: r => events[r.action] || r.action },
               { label: 'Сотрудник', cell: r => r.actor },
               {
                 label: 'Дата и время',
@@ -762,10 +866,11 @@ function DocumentRelationBanner({ document }) {
 function ReportEditor({ document }) {
   const ws = useWorkspace()
   const toast = useToast()
-  const [report, set] = useState(() => initialData(document, ws.today))
+  const minDate = ws.settings?.open_month ? ws.settings.open_month + '-01' : undefined
+  const [report, set] = useState(() => initialData(document, ws.today, minDate))
   const [tab, setTab] = useState('work')
   const [quote, setQuote] = useState(() => ({
-    key: JSON.stringify(initialData(document, ws.today)),
+    key: JSON.stringify(initialData(document, ws.today, minDate)),
     document
   }))
   const requestKey = JSON.stringify(report)
@@ -785,14 +890,27 @@ function ReportEditor({ document }) {
 
   const editable = !document || document.status === 'draft'
   const write = roleCanWrite(ws.user)
-  const minDate = ws.settings?.open_month ? ws.settings.open_month + '-01' : undefined
   const dateBelowOpenMonth = Boolean(editable && minDate && report.date && report.date < minDate)
+
+  const sourceWarehouses = (ws.warehouses || []).filter(
+    w => ws.user?.role !== 'master' || w.kind !== 'regional'
+  )
 
   const products = report.lines.map(l => ({
     ...l,
     item: ws.items.find(i => i.id === l.item_id) || { id: l.item_id, name: 'Изделие #' + l.item_id, size: '' }
   }))
   const computed = editable ? preview : document
+  const activeSourceId = computed?.source_id || document?.source_id || report.source_id || 1
+  const matchedWarehouse = (ws.warehouses || []).find(w => w.id === activeSourceId)
+  const activeSourceLabel = computed?.source_name
+    ? warehouseLabel(computed.source_name, computed.source_city)
+    : document?.source_name
+      ? warehouseLabel(document.source_name, document.source_city)
+      : matchedWarehouse
+        ? warehouseLabel(matchedWarehouse.name, matchedWarehouse.city)
+        : 'Склад сырья · Иваново'
+
   const assigned = products.flatMap((l, i) =>
     l.assignments.map(a => {
       const rate = computed?.lines
@@ -880,7 +998,8 @@ function ReportEditor({ document }) {
         stages[report.stage] +
         ' · ' +
         (document ? dayText(report.date) : 'данные из журнала выработки') +
-        (document ? ' · ' + (statuses[document.status] || document.status) : ' · Черновик')
+        (document ? ' · ' + (statuses[document.status] || document.status) : ' · Черновик') +
+        (!editable ? ' · Списание: ' + activeSourceLabel : '')
       }
       actions={
         documentMovement && (
@@ -900,7 +1019,10 @@ function ReportEditor({ document }) {
           <div className="kpi-item">
             <span className="kpi-label">Выработка</span>
             <strong className="kpi-value">{qty(document.quantity)} компл.</strong>
-            <span className="kpi-meta">{stages[document.stage]}</span>
+            <span className="kpi-meta">
+              {stages[document.stage]} ·{' '}
+              <a href={href('/stock/' + activeSourceId)}>{activeSourceLabel}</a>
+            </span>
           </div>
           <div className="kpi-item">
             <span className="kpi-label">Начислено</span>
@@ -913,7 +1035,7 @@ function ReportEditor({ document }) {
           </div>
           <div className="kpi-item">
             <span className="kpi-label">Автор</span>
-            <strong className="kpi-value" style={{ fontSize: '20px', lineHeight: '32px' }}>
+            <strong className="kpi-value" style={{ fontSize: 'clamp(17px, 2vw, 22px)', lineHeight: '30px' }}>
               {document.author}
             </strong>
             <span className="kpi-meta">{dayText(document.date)}</span>
@@ -973,6 +1095,14 @@ function ReportEditor({ document }) {
                   onChange={e => change({ ...report, shift: e.target.value })}
                 />
               </Field>
+              <Field label="Склад списания сырья">
+                <Select
+                  disabled={!editable}
+                  entries={sourceWarehouses.map(w => [String(w.id), warehouseLabel(w.name, w.city)])}
+                  value={String(report.source_id || 1)}
+                  onChange={e => change({ ...report, source_id: Number(e.target.value) || 1 }, tab !== 'work')}
+                />
+              </Field>
             </div>
             {dateBelowOpenMonth && (
               <div className="notice warning">
@@ -993,7 +1123,7 @@ function ReportEditor({ document }) {
               rowKey={r => r.item_id}
               empty="Добавьте хотя бы одно изделие из журнала выработки"
               columns={[
-                { label: 'Изделие', width: '30%', cell: r => r.item.name },
+                { label: 'Изделие', width: '30%', primary: true, cell: r => r.item.name },
                 { label: 'Размер', width: '14%', cell: r => r.item.size || '—' },
                 {
                   label: 'Количество, компл.',
@@ -1047,9 +1177,9 @@ function ReportEditor({ document }) {
                 products.length > 0 ? (
                   <tr>
                     <th scope="row" colSpan={2}>Итого выработка</th>
-                    <td className="right"><strong>{number(totalOutput)} компл.</strong></td>
+                    <td className="right" data-label="Выработка"><strong>{number(totalOutput)} компл.</strong></td>
                     {report.stage === 'pack' && (
-                      <td className="right">
+                      <td className="right" data-label="Передано с пошива">
                         {number(products.reduce((s, l) => s + (l.prepared || 0), 0))} компл.
                       </td>
                     )}
@@ -1070,13 +1200,17 @@ function ReportEditor({ document }) {
           <>
             <ErrorBox error={previewAction.error} />
             {computed ? (
-              <MaterialRows document={computed} />
+              <MaterialRows
+                document={computed}
+                sourceId={activeSourceId}
+                sourceLabel={activeSourceLabel}
+              />
             ) : (
               <EmptyState
                 title={previewAction.busy ? 'Расчёт материалов…' : 'Нет выработки для расчёта'}
                 description={
                   previewAction.busy
-                    ? 'Проверяем нормы по действующей спецификации и остатки сырья.'
+                    ? 'Проверяем нормы по действующей спецификации и остатки на складе «' + activeSourceLabel + '».'
                     : 'Добавьте изделия на вкладке «Выработка», чтобы увидеть потребность в сырье.'
                 }
               />
@@ -1141,6 +1275,7 @@ function ReportEditor({ document }) {
               columns={[
                 {
                   label: 'Исполнитель',
+                  primary: true,
                   cell: r =>
                     r.worker ? (
                       <a href={href('/people/' + r.staff_id)}>{r.worker.name}</a>
@@ -1178,11 +1313,11 @@ function ReportEditor({ document }) {
                 assigned.length > 0 ? (
                   <tr>
                     <th scope="row" colSpan={2}>Итого по технологической карте</th>
-                    <td className="right">
+                    <td className="right" data-label="Комплектов">
                       <strong>{number(assigned.reduce((s, r) => s + r.quantity, 0))}</strong>
                     </td>
                     <td />
-                    <td className="right"><strong>{money(totalWages)}</strong></td>
+                    <td className="right" data-label="Начислено"><strong>{money(totalWages)}</strong></td>
                     {editable && <td />}
                   </tr>
                 ) : null
@@ -1312,7 +1447,7 @@ function ReportEditor({ document }) {
       {confirm === 'post' && (
         <Confirm
           title="Провести отчёт?"
-          text="Система спишет рассчитанные материалы, отразит выпуск на складе и начислит сдельную зарплату."
+          text={'Система спишет рассчитанные материалы со склада «' + activeSourceLabel + '», отразит выпуск на складе и начислит сдельную зарплату.'}
           close={() => setConfirm('')}
           submit="Провести отчёт"
           action={async () => {
@@ -1392,6 +1527,7 @@ export function ReportDetail({ id }) {
 }
 
 export function ReportMovements({ id }) {
+  const ws = useWorkspace()
   const request = useRemote('/document/' + id)
   return (
     <Guard request={request}>
@@ -1399,6 +1535,10 @@ export function ReportMovements({ id }) {
         if (d.kind !== 'report' || d.status === 'draft') {
           return <ErrorBox error="По этому документу ещё нет движений." />
         }
+        const sourceId = d.source_id || 1
+        const sourceLabel = d.source_name
+          ? warehouseLabel(d.source_name, d.source_city)
+          : 'Склад сырья · Иваново'
         const assignmentRows = d.lines.flatMap(l =>
           l.assignments.map(a => ({
             ...a,
@@ -1409,11 +1549,27 @@ export function ReportMovements({ id }) {
         return (
           <Page
             title={'Движения отчёта ' + d.code}
-            subtitle={stages[d.stage] + ' · ' + dayText(d.date) + ' · ' + (statuses[d.status] || d.status)}
+            subtitle={
+              stages[d.stage] +
+              ' · ' +
+              dayText(d.date) +
+              ' · ' +
+              (statuses[d.status] || d.status) +
+              ' · Списание: ' +
+              sourceLabel
+            }
             actions={<Button to={'/reports/' + d.id}>К отчёту</Button>}
           >
             <DocumentRelationBanner document={d} />
-            <Card title="Материалы и выпуск">
+            <Card
+              title="Материалы и выпуск"
+              subtitle={
+                <>
+                  Склад списания сырья:{' '}
+                  <a href={href('/stock/' + sourceId)}>{sourceLabel}</a>
+                </>
+              }
+            >
               <Table
                 label="Материалы и выпуск"
                 rows={d.movements}
@@ -1425,12 +1581,17 @@ export function ReportMovements({ id }) {
                   },
                   {
                     label: 'Позиция',
-                    cell: r =>
-                      r.warehouse_id === 1 ? (
-                        <a href={href('/stock/1/items/' + r.item_id)}>{r.name}</a>
-                      ) : (
-                        <a href={href('/catalog/' + r.item_id)}>{itemText(r)}</a>
-                      )
+                    primary: true,
+                    cell: r => {
+                      const item = ws.items?.find(i => i.id === r.item_id)
+                      if (r.warehouse_id === 1) {
+                        return <a href={href('/stock/1/items/' + r.item_id)}>{r.name}</a>
+                      }
+                      if (item?.kind === 'raw') {
+                        return <a href={href('/stock/' + r.warehouse_id)}>{r.name}</a>
+                      }
+                      return <a href={href('/catalog/' + r.item_id)}>{itemText(r)}</a>
+                    }
                   },
                   {
                     label: 'Приход',
@@ -1469,6 +1630,7 @@ export function ReportMovements({ id }) {
                 columns={[
                   {
                     label: 'Исполнитель',
+                    primary: true,
                     cell: r => <a href={href('/people/' + r.staff_id)}>{r.name}</a>
                   },
                   { label: 'Изделие', cell: r => r.item_name },
@@ -1485,11 +1647,11 @@ export function ReportMovements({ id }) {
                   assignmentRows.length > 0 ? (
                     <tr>
                       <th scope="row" colSpan={3}>Итого начислено</th>
-                      <td className="right">
+                      <td className="right" data-label="Комплектов">
                         <strong>{qty(assignmentRows.reduce((s, r) => s + r.quantity, 0))}</strong>
                       </td>
                       <td />
-                      <td className="right"><strong>{money(d.wages)}</strong></td>
+                      <td className="right" data-label="Начислено"><strong>{money(d.wages)}</strong></td>
                     </tr>
                   ) : null
                 }

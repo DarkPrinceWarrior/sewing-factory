@@ -10,13 +10,15 @@ STAGE_NAME = {"cut":"Раскрой","sew":"Пошив","pack":"Упаковка
 KIND = {"report":"Отчёт за смену","receipt":"Поступление сырья","transfer":"Перемещение","sale":"Продажа","opening":"Начальные остатки"}
 
 BASE_DOC = """
-    SELECT d.id,d.kind,d.code,d.status,d.date,d.created_at,d.updated_at,d.stage,d.shift,d.source_id,d.target_id,
+    SELECT d.id,d.kind,d.code,d.status,d.date,d.created_at,d.updated_at,d.stage,d.shift,
+           COALESCE(d.source_id, CASE WHEN d.kind='report' THEN 1 END) source_id,d.target_id,
            u.name author, d.supplier,d.reference,d.payment, sw.city source_city, sw.name source_name, tw.city target_city, tw.name target_name,
            d.source_doc, src.code source_code, rep.id replacement_id, rep.code replacement_code,
            COALESCE(l.quantity,0) quantity,COALESCE(l.total,0) total,COALESCE(l.cost,0) book_value,
            COALESCE(wages.amount,0) wages
       FROM documents d JOIN users u ON u.id=d.author_id
-      LEFT JOIN warehouses sw ON sw.id=d.source_id LEFT JOIN warehouses tw ON tw.id=d.target_id
+      LEFT JOIN warehouses sw ON sw.id=COALESCE(d.source_id, CASE WHEN d.kind='report' THEN 1 END)
+      LEFT JOIN warehouses tw ON tw.id=d.target_id
       LEFT JOIN documents src ON src.id=d.source_doc
       LEFT JOIN (SELECT source_doc, MAX(id) id, MAX(code) code FROM documents WHERE source_doc IS NOT NULL GROUP BY source_doc) rep ON rep.source_doc=d.id
       LEFT JOIN (SELECT doc_id,SUM(quantity) quantity,SUM((quantity*price+500)/1000) total,SUM(book_value) cost
@@ -103,13 +105,14 @@ def detail(db, user, doc_id):
     d["lines"] = records(db, """
         SELECT l.*,i.name,i.size,i.unit,i.sku,s.version FROM lines l JOIN items i ON i.id=l.item_id
           LEFT JOIN specs s ON s.id=l.spec_id WHERE l.doc_id=? ORDER BY l.id""", (doc_id,))
+    source_wh = d["source_id"] or 1
     for l in d["lines"]:
         l["assignments"] = records(db, """
             SELECT a.staff_id,a.quantity,a.rate,p.name FROM assignments a JOIN staff p ON p.id=a.staff_id WHERE a.line_id=?""", (l["id"],))
         l["materials"] = records(db, """
             SELECT m.*,i.name,i.unit,COALESCE(b.quantity,0) available FROM material_snapshots m JOIN items i ON i.id=m.item_id
-            LEFT JOIN balances b ON b.item_id=m.item_id AND b.warehouse_id=1
-            WHERE m.line_id=? ORDER BY m.item_id""",(l["id"],))
+            LEFT JOIN balances b ON b.item_id=m.item_id AND b.warehouse_id=?
+            WHERE m.line_id=? ORDER BY m.item_id""",(source_wh,l["id"]))
     moves = """
         SELECT m.*,i.name,i.size,i.unit,w.name warehouse,w.city,
                (SELECT COALESCE(SUM(previous.quantity),0) FROM movements previous
@@ -140,14 +143,16 @@ def stocks(db,user,warehouse_id):
         raise RuleViolation("Склад не найден",404)
     day=today()
     rows=records(db, """
-        SELECT i.id item_id,i.name,i.sku,i.size,i.unit,i.category,i.price,
+        SELECT i.id item_id,i.kind,i.name,i.sku,i.size,i.unit,i.category,i.price,
                COALESCE(b.quantity,0) quantity,COALESCE(b.value,0) value,
                COALESCE(a.incoming,0) incoming,COALESCE(a.outgoing,0) outgoing
           FROM items i LEFT JOIN balances b ON b.item_id=i.id AND b.warehouse_id=?
           LEFT JOIN (SELECT item_id,SUM(CASE WHEN quantity>0 THEN quantity ELSE 0 END) incoming,
                     SUM(CASE WHEN quantity<0 THEN -quantity ELSE 0 END) outgoing
                       FROM movements WHERE warehouse_id=? AND happened_at>=? GROUP BY item_id) a ON a.item_id=i.id
-          WHERE i.kind=? AND (b.item_id IS NOT NULL OR a.item_id IS NOT NULL) ORDER BY i.id
+          WHERE (i.kind=? AND (b.item_id IS NOT NULL OR a.item_id IS NOT NULL))
+             OR COALESCE(b.quantity,0) > 0 OR a.item_id IS NOT NULL
+          ORDER BY i.id
         """, (warehouse_id,warehouse_id,day,"raw" if w["kind"]=="raw" else "product"))
     if user["role"]=="regional":
         for r in rows:
@@ -207,18 +212,34 @@ def overview(db,user,day):
         SELECT d.stage,SUM(l.quantity) quantity,COUNT(DISTINCT d.id) documents
         FROM documents d JOIN lines l ON l.doc_id=d.id WHERE d.date=? AND d.kind='report' AND d.status='posted' GROUP BY d.stage
     """,(day,))
+    draft_stages=records(db,"""
+        SELECT d.stage,SUM(l.quantity) quantity,COUNT(DISTINCT d.id) documents
+        FROM documents d JOIN lines l ON l.doc_id=d.id WHERE d.date=? AND d.kind='report' AND d.status='draft' GROUP BY d.stage
+    """,(day,))
     wages=scalar(db,"""
         SELECT COALESCE(SUM((a.quantity*a.rate+500)/1000),0) FROM assignments a JOIN lines l ON a.line_id=l.id
         JOIN documents d ON d.id=l.doc_id WHERE d.kind='report' AND d.status='posted' AND d.date=?
     """,(day,))
-    reports=list_documents(db,user,"report",start=day,end=day,status="posted",limit=3)["rows"]
-    pending=list_documents(db,user,"report",status="draft",limit=3)
+    reports=list_documents(db,user,"report",start=day,end=day,status="posted",limit=50)["rows"]
+    day_drafts=list_documents(db,user,"report",start=day,end=day,status="draft",limit=50)["rows"]
+    day_reports=records(db, BASE_DOC + """
+        WHERE d.kind='report' AND d.date=? AND d.status IN ('posted','draft')
+        ORDER BY d.created_at DESC, d.id DESC LIMIT 50
+    """,(day,))
+    pending_total=scalar(db,"SELECT count(*) FROM documents d WHERE d.kind='report' AND d.status='draft'")
+    pending_rows=records(db, BASE_DOC + """
+        WHERE d.kind='report' AND d.status='draft'
+        ORDER BY CASE WHEN d.date=? THEN 0 ELSE 1 END, d.date DESC, d.created_at DESC, d.id DESC
+        LIMIT 10
+    """,(day,))
+    pending={"rows":pending_rows,"total":pending_total}
     wip=records(db,"""
         SELECT w.id,w.kind,COALESCE(SUM(m.quantity),0) quantity FROM warehouses w
         LEFT JOIN movements m ON m.warehouse_id=w.id AND m.happened_at < ?
         WHERE w.kind IN ('cut','sew','pack') GROUP BY w.id ORDER BY w.id
     """,(day+"T24",))
-    return {"day":day,"stages":q,"wages":wages,"reports":reports,"pending":pending,"wip":wip}
+    return {"day":day,"stages":q,"draft_stages":draft_stages,"wages":wages,"reports":reports,
+            "day_drafts":day_drafts,"day_reports":day_reports,"pending":pending,"wip":wip}
 
 
 def payroll(db,start,end,stage="",staff=0):
@@ -263,7 +284,7 @@ def month_summary(db,month):
         return scalar(db,"SELECT COALESCE("+sql+",0)",params)
     opening=sum_where("(SELECT SUM(value) FROM movements WHERE warehouse_id IN (2,3,4) AND happened_at<?)",(start,))
     closing=sum_where("(SELECT SUM(value) FROM movements WHERE warehouse_id IN (2,3,4) AND happened_at<?)",(end,))
-    materials=sum_where("(SELECT -SUM(m.value) FROM movements m JOIN documents d ON d.id=m.doc_id WHERE warehouse_id=1 AND (operation='material' OR (operation='correction' AND d.kind='report')) AND happened_at>=? AND happened_at<?)",(start,end))
+    materials=sum_where("(SELECT -SUM(m.value) FROM movements m JOIN documents d ON d.id=m.doc_id JOIN items i ON i.id=m.item_id WHERE i.kind='raw' AND (m.operation='material' OR (m.operation='correction' AND d.kind='report')) AND m.happened_at>=? AND m.happened_at<?)",(start,end))
     salary=sum(row["amount"] for row in payroll(db,start,end[:10]))
     overhead=record(db,"SELECT * FROM overhead WHERE month=?",(month,))
     completed=scalar(db,"SELECT COALESCE(SUM(l.quantity),0) FROM lines l JOIN documents d ON d.id=l.doc_id WHERE d.kind='report' AND d.status='posted' AND d.stage='pack' AND d.date BETWEEN ? AND ?",(start,end[:10]))

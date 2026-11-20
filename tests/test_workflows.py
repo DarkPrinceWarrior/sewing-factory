@@ -120,7 +120,7 @@ def test_transfer_and_sale_respect_warehouse_scope(client):
     assert received.status_code == 200 and received.json()["status"] == "received"
     assert amount(client,6,item) == moscow + 4000
     assert client.post(f"/api/transfers/{doc}/receive").status_code == 409
-    sale = {"payment":"card","request_key":str(uuid4()),"lines":[{"item_id":item,"quantity":2,"price":1}]}
+    sale = {"payment":"card","request_key":str(uuid4()),"lines":[{"item_id":item,"quantity":2}]}
     assert client.post("/api/sales", json={**sale,"warehouse_id":7}).status_code == 403
     sold = client.post("/api/sales", json=sale)
     assert sold.status_code == 200, sold.text
@@ -267,7 +267,7 @@ def test_role_boundaries_matrix(client):
     assert client.put("/api/access", json={"staff_id": 4, "warehouse_id": 6}).status_code == 403
     assert client.delete("/api/access/4").status_code == 403
     assert client.post("/api/warehouses", json={"city": "Тверь", "name": "Склад", "address": "Улица 1"}).status_code == 403
-    assert client.post("/api/sales", json={"payment": "card", "request_key": str(uuid4()), "lines": [{"item_id": 100, "quantity": 1}]}).status_code == 403
+    assert client.post("/api/sales", json={"warehouse_id": 1, "payment": "card", "request_key": str(uuid4()), "lines": [{"item_id": 100, "quantity": 1}]}).status_code == 422
     assert client.post("/api/transfers", json={"date": "2025-01-01", "target_id": 6, "lines": [{"item_id": 100, "quantity": 1, "price": 100}]}).status_code == 422
     assert client.post("/api/catalog", json={"sku": "ZERO-1", "name": "Zero", "size": "Евро", "category": "КПБ", "price": 0, "cut": 10, "sew": 20, "pack": 5, "norms": [{"item_id": 1, "stage": "cut", "quantity": 1}, {"item_id": 5, "stage": "sew", "quantity": 1}, {"item_id": 9, "stage": "pack", "quantity": 1}]}).status_code == 422
 
@@ -373,3 +373,187 @@ def test_session_cookie_secure_flag_matches_transport(client, monkeypatch):
     env_login = client.post("/api/login", json={"email": "admin@factory.local", "password": "Ivanovo!2026"})
     assert env_login.status_code == 200
     assert "secure" in env_login.headers["set-cookie"].lower()
+
+
+def test_flexible_spec_norms_zero_and_multiple_materials(client):
+    ws = login(client, "oksana")
+    cutter = next(p for p in ws["staff"] if p["stage"] == "cut" and p["active"])
+    # 1. Create product with 0 material norms
+    created = client.post("/api/catalog", json={
+        "sku": "FLEX-001", "name": "Наволочка без списания", "size": "50×70", "category": "Постельное бельё",
+        "price": "590.00", "cut": "15.00", "sew": "35.00", "pack": "10.00", "norms": [],
+    })
+    assert created.status_code == 200, created.text
+    pid = created.json()["id"]
+    detail = client.get(f"/api/catalog/{pid}").json()
+    assert detail["versions"][0]["norms"] == []
+
+    # Post cut report with 0 materials
+    rep = client.post("/api/reports?post=true", json={
+        "date": today(), "stage": "cut",
+        "lines": [{"item_id": pid, "quantity": 4, "assignments": [{"staff_id": cutter["id"], "quantity": 4}]}],
+    })
+    assert rep.status_code == 200, rep.text
+    assert rep.json()["lines"][0]["materials"] == []
+    assert rep.json()["wages"] == 6000
+
+    # 2. Add spec version with 0 materials on cut, 2 materials on sew, fractional kg material on pack
+    kg_mat = client.post("/api/materials", json={"name": "Наполнитель холлофайбер", "unit": "кг", "category": "Наполнители"})
+    assert kg_mat.status_code == 200, kg_mat.text
+    kg_id = kg_mat.json()["id"]
+    ver = client.post(f"/api/catalog/{pid}/versions", json={
+        "cut": "15.00", "sew": "40.00", "pack": "12.00",
+        "norms": [
+            {"item_id": 5, "stage": "sew", "quantity": "12.500"},
+            {"item_id": 7, "stage": "sew", "quantity": 2},
+            {"item_id": kg_id, "stage": "pack", "quantity": "0.375"},
+        ],
+    })
+    assert ver.status_code == 200, ver.text
+    updated = client.get(f"/api/catalog/{pid}").json()
+    assert len(updated["versions"][0]["norms"]) == 3
+
+
+def test_report_custom_source_warehouse_and_correction(client):
+    ws = login(client, "oksana")
+    cutter = next(p for p in ws["staff"] if p["stage"] == "cut" and p["active"])
+    raw_before = amount(client, 1, 1)
+    cut_raw_before = amount(client, 2, 1)
+
+    # Receive fabric directly onto warehouse 2 (Склад кроя)
+    rec = client.post("/api/receipts", json={
+        "date": today(), "supplier": "Склад-поставщик", "reference": f"УПД-CUT-{uuid4().hex[:6]}",
+        "target_id": 2, "lines": [{"item_id": 1, "quantity": "50.000", "price": "150.00"}],
+    })
+    assert rec.status_code == 200, rec.text
+    assert rec.json()["target_id"] == 2
+    assert amount(client, 2, 1) == cut_raw_before + 50000
+    assert amount(client, 1, 1) == raw_before
+
+    # Preview report using source_id=2 checks availability on warehouse 2
+    payload = {
+        "date": today(), "stage": "cut", "source_id": 2,
+        "lines": [{"item_id": 100, "quantity": 2, "assignments": [{"staff_id": cutter["id"], "quantity": 2}]}],
+    }
+    prev = client.post("/api/reports/preview", json=payload)
+    assert prev.status_code == 200, prev.text
+    assert prev.json()["source_id"] == 2
+    assert prev.json()["source_name"] == "Склад кроя"
+    assert prev.json()["lines"][0]["materials"][0]["available"] == cut_raw_before + 50000
+
+    # Post withdraws from warehouse 2, leaving warehouse 1 unchanged
+    posted = client.post("/api/reports?post=true", json=payload)
+    assert posted.status_code == 200, posted.text
+    doc = posted.json()
+    used_qty = doc["lines"][0]["materials"][0]["quantity"]
+    assert doc["source_id"] == 2
+    assert amount(client, 2, 1) == cut_raw_before + 50000 - used_qty
+    assert amount(client, 1, 1) == raw_before
+
+    # Correction restores warehouse 2 and preserves source_id=2 on replacement draft
+    corr = client.post(f"/api/reports/{doc['id']}/correct", json={"reason": "Проверка склада списания"})
+    assert corr.status_code == 200, corr.text
+    assert corr.json()["source_id"] == 2
+    assert amount(client, 2, 1) == cut_raw_before + 50000
+
+    # Master cannot pick a regional warehouse as source_id
+    login(client, "master")
+    forbidden = client.post("/api/reports/preview", json={**payload, "source_id": 6})
+    assert forbidden.status_code == 403
+
+
+def test_overview_shows_first_of_month_drafts_and_posted_reports(client):
+    ws = login(client, "oksana")
+    cutter = next(p for p in ws["staff"] if p["stage"] == "cut" and p["active"])
+    first_day = today()[:7] + "-01"
+    before = client.get(f"/api/overview?day={first_day}").json()
+    before_cut = next((s["quantity"] for s in before["stages"] if s["stage"] == "cut"), 0)
+
+    draft = client.post("/api/reports", json={
+        "date": first_day, "stage": "cut",
+        "lines": [{"item_id": 100, "quantity": 7, "assignments": [{"staff_id": cutter["id"], "quantity": 7}]}],
+    })
+    assert draft.status_code == 200, draft.text
+    draft_id = draft.json()["id"]
+
+    ov_draft = client.get(f"/api/overview?day={first_day}").json()
+    assert any(r["id"] == draft_id for r in ov_draft["day_drafts"])
+    assert any(r["id"] == draft_id and r["status"] == "draft" for r in ov_draft["day_reports"])
+    assert any(s["stage"] == "cut" and s["quantity"] >= 7000 for s in ov_draft["draft_stages"])
+    assert ov_draft["pending"]["rows"][0]["date"] == first_day
+    assert any(r["id"] == draft_id for r in ov_draft["pending"]["rows"])
+
+    posted = client.put(f"/api/reports/{draft_id}?post=true", json={
+        "date": first_day, "stage": "cut",
+        "lines": [{"item_id": 100, "quantity": 7, "assignments": [{"staff_id": cutter["id"], "quantity": 7}]}],
+    })
+    assert posted.status_code == 200, posted.text
+
+    ov_posted = client.get(f"/api/overview?day={first_day}").json()
+    after_cut = next((s["quantity"] for s in ov_posted["stages"] if s["stage"] == "cut"), 0)
+    assert after_cut == before_cut + 7000
+    assert any(r["id"] == draft_id and r["status"] == "posted" for r in ov_posted["reports"])
+    assert any(r["id"] == draft_id and r["status"] == "posted" for r in ov_posted["day_reports"])
+
+
+def test_manual_raw_material_creation_and_receipt_target_warehouse(client):
+    login(client, "master")
+    assert client.post("/api/materials", json={"name": "Запрещённый"}).status_code == 403
+    login(client, "moscow")
+    assert client.post("/api/materials", json={"name": "Запрещённый"}).status_code == 403
+
+    login(client, "oksana")
+    mat = client.post("/api/materials", json={"name": "Лента атласная 20 мм", "unit": "рул.", "category": "Фурнитура"})
+    assert mat.status_code == 200, mat.text
+    created = mat.json()
+    assert created["kind"] == "raw" and created["sku"].startswith("RAW-")
+    assert client.post("/api/materials", json={"name": "Дубль", "sku": created["sku"]}).status_code == 409
+
+    kg_mat = client.post("/api/materials", json={"name": "Синтепон 200", "unit": "кг", "category": "Утеплитель"}).json()
+    rec = client.post("/api/receipts", json={
+        "date": today(), "supplier": "ИвТекс", "reference": f"УПД-KG-{uuid4().hex[:6]}",
+        "target_id": 3, "lines": [{"item_id": kg_mat["id"], "quantity": "12.345", "price": "320.00"}],
+    })
+    assert rec.status_code == 200, rec.text
+    assert amount(client, 3, kg_mat["id"]) == 12345
+
+
+def test_ivanovo_sale_editable_price_memo_and_scope(client):
+    login(client, "admin")
+    item = 100
+    before = amount(client, 5, item)
+    key = str(uuid4())
+    payload = {
+        "payment": "transfer", "request_key": key, "memo": "Оптовый заказ · клиент ООО Альфа",
+        "lines": [{"item_id": item, "quantity": 2, "price": "1750.50"}],
+    }
+    sold = client.post("/api/sales", json=payload)
+    assert sold.status_code == 200, sold.text
+    doc = sold.json()
+    assert doc["source_id"] == 5
+    assert doc["source_city"] == "Иваново"
+    assert doc["total"] == 350100
+    assert doc["memo"] == payload["memo"]
+    assert amount(client, 5, item) == before - 2000
+
+    # Idempotency: identical retry returns same document; changing price or memo rejects with 409
+    assert client.post("/api/sales", json=payload).json()["id"] == doc["id"]
+    assert client.post("/api/sales", json={**payload, "memo": "Другой комментарий"}).status_code == 409
+    assert client.post("/api/sales", json={**payload, "lines": [{"item_id": item, "quantity": 2, "price": "1800.00"}]}).status_code == 409
+
+    # Ivanovo sales appear in central summary, journal, and xlsx
+    summary = client.get("/api/sales-summary", params={"warehouse": 5}).json()
+    assert summary["documents"] >= 1
+    assert any(c["id"] == 5 and c["city"] == "Иваново" for c in summary["cities"])
+    journal = client.get("/api/documents/sale", params={"warehouse": 5}).json()
+    assert any(r["id"] == doc["id"] for r in journal["rows"])
+    export = client.get("/api/documents/sale", params={"warehouse": 5, "xlsx": "true"})
+    rows = list(load_workbook(io.BytesIO(export.content), data_only=True).active.values)
+    assert len(rows) == journal["total"] + 1
+    assert any(row[0] == doc["code"] and row[4] == "Иваново" for row in rows[1:])
+
+    # Regional still cannot see Ivanovo sales or cost
+    login(client, "moscow")
+    assert client.get(f"/api/document/{doc['id']}").status_code == 404
+    assert client.get("/api/documents/sale", params={"warehouse": 5}).json()["total"] == 0
+    assert client.get("/api/sales-summary", params={"warehouse": 5}).json()["documents"] == 0

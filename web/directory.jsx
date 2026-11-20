@@ -9,9 +9,19 @@ import { PasswordInput, SearchPicker } from './pickers'
 
 const production = Object.entries(stages).slice(0, 3)
 
+const MATERIAL_UNITS = [
+  ['м', 'м (метры)'],
+  ['шт.', 'шт. (штуки)'],
+  ['кг', 'кг (килограммы)'],
+  ['рул.', 'рул. (рулоны)'],
+  ['уп.', 'уп. (упаковки)'],
+  ['компл.', 'компл. (комплекты)']
+]
+
 const payrollColumns = [
   {
     label: 'Сотрудник',
+    primary: true,
     cell: r => (
       <>
         <a href={href('/people/' + r.id)}>{r.name}</a>
@@ -27,6 +37,8 @@ const payrollColumns = [
 
 const edit = (set, key, numeric = false) => e =>
   set(v => ({ ...v, [key]: numeric ? Number(e.target.value) : e.target.value }))
+
+const isFractionalUnit = unit => unit === 'м' || unit === 'кг'
 
 function monthBounds(ym) {
   const y = Number(ym.slice(0, 4))
@@ -132,6 +144,7 @@ export function Catalog() {
           columns={[
             {
               label: 'Изделие',
+              primary: true,
               cell: r => (
                 <>
                   <a href={href('/catalog/' + r.id)}>{r.name}</a>
@@ -152,6 +165,73 @@ export function Catalog() {
         />
       </Card>
     </Page>
+  )
+}
+
+function NewMaterialDialog({ close, done }) {
+  const toast = useToast()
+  const formId = useId()
+  const state = useAction()
+  const [data, setData] = useState({ name: '', unit: 'м', category: 'Сырьё', sku: '' })
+
+  return (
+    <Dialog
+      title="Новый материал"
+      close={close}
+      closeDisabled={state.busy}
+      footer={<FormActions form={formId} busy={state.busy} cancel={close} submit="Создать материал" />}
+    >
+      <form
+        id={formId}
+        onSubmit={e => {
+          e.preventDefault()
+          state.run(async () => {
+            const payload = {
+              name: data.name.trim(),
+              unit: data.unit,
+              category: data.category.trim() || 'Сырьё',
+              sku: data.sku.trim()
+            }
+            const created = await api('/materials', 'POST', payload)
+            toast.success('Материал «' + created.name + '» добавлен')
+            done(created)
+          })
+        }}
+      >
+        <div className="form-grid">
+          <Field label="Название материала" wide>
+            <input
+              required
+              maxLength="180"
+              placeholder="Например: Флизелин клеевой или Нитки №40"
+              value={data.name}
+              onChange={edit(setData, 'name')}
+            />
+          </Field>
+          <Field label="Единица измерения">
+            <Select value={data.unit} entries={MATERIAL_UNITS} onChange={edit(setData, 'unit')} />
+          </Field>
+          <Field label="Категория">
+            <input
+              required
+              maxLength="180"
+              placeholder="Ткани, Нитки, Фурнитура, Упаковка"
+              value={data.category}
+              onChange={edit(setData, 'category')}
+            />
+          </Field>
+          <Field label="Артикул (необязательно)" wide help="Если оставить пустым, артикул сформируется автоматически">
+            <input
+              maxLength="180"
+              placeholder="Например: МТ-015"
+              value={data.sku}
+              onChange={edit(setData, 'sku')}
+            />
+          </Field>
+        </div>
+        <ErrorBox error={state.error} />
+      </form>
+    </Dialog>
   )
 }
 
@@ -180,14 +260,46 @@ function SpecEditor({ detail, close, done }) {
           stage: n.stage,
           quantity: n.quantity / 1000
         }))
-      : production.map(([s], i) => ({ key: i, item_id: '', stage: s, quantity: 1 }))
+      : []
   )
+  const [createdMaterials, setCreatedMaterials] = useState([])
+  const [newMaterialStage, setNewMaterialStage] = useState(null)
+
+  const rawItems = useMemo(() => {
+    const map = new Map()
+    for (const item of ws.items) {
+      if (item.kind === 'raw') map.set(item.id, item)
+    }
+    for (const item of createdMaterials) {
+      map.set(item.id, item)
+    }
+    return [...map.values()]
+  }, [ws.items, createdMaterials])
 
   function patch(key, change) {
     setNorms(list => list.map(n => (n.key === key ? { ...n, ...change } : n)))
   }
 
-  const rawItems = ws.items.filter(i => i.kind === 'raw')
+  function addNorm(stage = 'cut', itemId = '') {
+    setNorms(list => [
+      ...list,
+      { key: Math.max(-1, ...list.map(n => n.key)) + 1, item_id: itemId, stage, quantity: 1 }
+    ])
+  }
+
+  function handleMaterialCreated(created) {
+    setCreatedMaterials(list => [...list, created])
+    ws.refresh()
+    setNorms(list => {
+      const emptyIdx = list.findIndex(n => !n.item_id && (!newMaterialStage || n.stage === newMaterialStage))
+      if (emptyIdx >= 0) {
+        return list.map((n, idx) => (idx === emptyIdx ? { ...n, item_id: created.id } : n))
+      }
+      const nextKey = Math.max(-1, ...list.map(n => n.key)) + 1
+      return [...list, { key: nextKey, item_id: created.id, stage: newMaterialStage || 'cut', quantity: 1 }]
+    })
+    setNewMaterialStage(null)
+  }
 
   const form = (
     <form
@@ -196,11 +308,16 @@ function SpecEditor({ detail, close, done }) {
       onSubmit={e => {
         e.preventDefault()
         state.run(async () => {
-          if (!norms.length) throw new Error('Добавьте хотя бы одну норму расхода материала.')
-          if (norms.some(n => !n.item_id)) throw new Error('Выберите материал в каждой строке нормы.')
+          if (norms.some(n => !n.item_id)) {
+            throw new Error('Выберите материал в каждой добавленной строке или удалите пустую строку.')
+          }
           const data = {
             ...rates,
-            norms: norms.map(({ key, ...n }) => n),
+            norms: norms.map(({ key, ...n }) => ({
+              item_id: Number(n.item_id),
+              stage: n.stage,
+              quantity: n.quantity
+            })),
             ...(detail ? {} : details)
           }
           const result = await api('/catalog' + (detail ? '/' + detail.item.id + '/versions' : ''), 'POST', data)
@@ -230,72 +347,82 @@ function SpecEditor({ detail, close, done }) {
               max="20000000"
               step=".01"
               type="number"
+              inputMode="decimal"
               value={details.price}
               onChange={edit(setDetails, 'price')}
             />
           </Field>
         </div>
       )}
+
       <h3>Нормы материалов на 1 комплект</h3>
-      <div className="spec-lines">
-        {norms.map(n => {
-          const unit = rawItems.find(i => i.id === n.item_id)?.unit
-          const availableEntries = rawItems
-            .filter(i => i.id === n.item_id || !norms.some(o => o.stage === n.stage && o.item_id === i.id))
-            .map(i => [i.id, i.name, false, [i.sku, i.unit].filter(Boolean).join(' · ')])
-          return (
-            <div className="spec-line" key={n.key}>
-              <Field label="Этап">
-                <Select
-                  value={n.stage}
-                  entries={production}
-                  onChange={e => patch(n.key, { stage: e.target.value, item_id: '' })}
-                />
-              </Field>
-              <Field label="Материал">
-                <SearchPicker
-                  required
-                  value={n.item_id}
-                  placeholder="Выберите материал"
-                  entries={availableEntries}
-                  onChange={e => patch(n.key, { item_id: Number(e.target.value) })}
-                />
-              </Field>
-              <Field label={'На комплект' + (unit ? ', ' + unit : '')}>
-                <input
-                  required
-                  min={unit === 'м' ? '.001' : '1'}
-                  max="100000"
-                  step={unit === 'м' ? '.001' : '1'}
-                  type="number"
-                  value={n.quantity}
-                  onChange={e => patch(n.key, { quantity: e.target.value })}
-                />
-              </Field>
-              <Button
-                kind="quiet-danger"
-                className="icon-only"
-                aria-label="Убрать материал"
-                disabled={norms.length <= 1}
-                onClick={() => setNorms(list => list.filter(o => o.key !== n.key))}
-              >
-                ×
-              </Button>
-            </div>
-          )
-        })}
+      {norms.length === 0 ? (
+        <div className="inline-note info">
+          Материалы не указаны — списание сырья не выполняется. Можно добавить сколько угодно материалов на любой этап или сохранить спецификацию без сырья.
+        </div>
+      ) : (
+        <div className="spec-lines">
+          {norms.map(n => {
+            const unit = rawItems.find(i => i.id === n.item_id)?.unit
+            const fractional = isFractionalUnit(unit)
+            const availableEntries = rawItems
+              .filter(i => i.id === n.item_id || !norms.some(o => o.stage === n.stage && o.item_id === i.id))
+              .map(i => [i.id, i.name, false, [i.sku, i.unit].filter(Boolean).join(' · ')])
+            return (
+              <div className="spec-line" key={n.key}>
+                <Field label="Этап">
+                  <Select
+                    value={n.stage}
+                    entries={production}
+                    onChange={e => patch(n.key, { stage: e.target.value, item_id: '' })}
+                  />
+                </Field>
+                <Field label="Материал">
+                  <SearchPicker
+                    required
+                    value={n.item_id}
+                    placeholder="Выберите материал"
+                    entries={availableEntries}
+                    onChange={e => patch(n.key, { item_id: Number(e.target.value) })}
+                  />
+                </Field>
+                <Field label={'На комплект' + (unit ? ', ' + unit : '')}>
+                  <input
+                    required
+                    min={fractional ? '.001' : '1'}
+                    max="100000"
+                    step={fractional ? '.001' : '1'}
+                    type="number"
+                    inputMode={fractional ? 'decimal' : 'numeric'}
+                    value={n.quantity}
+                    onChange={e => patch(n.key, { quantity: e.target.value })}
+                  />
+                </Field>
+                <Button
+                  kind="quiet-danger"
+                  className="icon-only"
+                  aria-label="Убрать материал"
+                  onClick={() => setNorms(list => list.filter(o => o.key !== n.key))}
+                >
+                  ×
+                </Button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <div className="left-actions">
+        {production.map(([stageCode, stageLabel]) => (
+          <Button key={stageCode} onClick={() => addNorm(stageCode)}>
+            + {stageLabel}
+          </Button>
+        ))}
+        <Button kind="ghost" onClick={() => setNewMaterialStage('cut')}>
+          + Новый материал
+        </Button>
       </div>
-      <Button
-        disabled={norms.some(n => !n.item_id)}
-        onClick={() =>
-          setNorms(list => [
-            ...list,
-            { key: Math.max(-1, ...list.map(n => n.key)) + 1, item_id: '', stage: 'cut', quantity: 1 }
-          ])
-        }
-      >
-        Добавить материал
-      </Button>
+
       <h3>Сдельные расценки</h3>
       <div className="toolbar">
         {production.map(([s, label]) => (
@@ -303,6 +430,7 @@ function SpecEditor({ detail, close, done }) {
             <input
               required
               type="number"
+              inputMode="decimal"
               min="0"
               max="20000000"
               step=".01"
@@ -317,17 +445,27 @@ function SpecEditor({ detail, close, done }) {
     </form>
   )
 
-  return detail ? (
-    <Dialog
-      title="Новая версия спецификации"
-      close={close}
-      closeDisabled={state.busy}
-      footer={<FormActions form={formId} busy={state.busy} cancel={close} submit="Сохранить версию" />}
-    >
-      {form}
-    </Dialog>
-  ) : (
-    form
+  return (
+    <>
+      {detail ? (
+        <Dialog
+          title="Новая версия спецификации"
+          close={close}
+          closeDisabled={state.busy}
+          footer={<FormActions form={formId} busy={state.busy} cancel={close} submit="Сохранить версию" />}
+        >
+          {form}
+        </Dialog>
+      ) : (
+        form
+      )}
+      {newMaterialStage !== null && (
+        <NewMaterialDialog
+          close={() => setNewMaterialStage(null)}
+          done={handleMaterialCreated}
+        />
+      )}
+    </>
   )
 }
 
@@ -368,7 +506,7 @@ function ProductView({ detail, selected, refresh }) {
 
   const materialColumns = [
     { label: 'Этап', cell: r => stages[r.stage] },
-    { label: 'Материал', cell: r => <a href={href('/stock/1/items/' + r.item_id)}>{r.name}</a> },
+    { label: 'Материал', primary: true, cell: r => <a href={href('/stock/1/items/' + r.item_id)}>{r.name}</a> },
     { label: 'Количество', align: 'right', cell: r => <strong>{qty(r.quantity)}</strong> },
     { label: 'Единица', cell: r => r.unit },
     ...(compareTarget
@@ -386,7 +524,7 @@ function ProductView({ detail, selected, refresh }) {
             align: 'right',
             cell: r => {
               const prev = normMap.get(`${r.stage}:${r.item_id}`)
-              if (!prev) return <span className="version-diff diff-up">Новая позиция</span>
+              if (!prev) return <span className="diff-up">Новая позиция</span>
               const delta = r.quantity - prev.quantity
               return (
                 <span className={delta > 0 ? 'diff-up' : delta < 0 ? 'diff-down' : 'muted'}>
@@ -402,7 +540,7 @@ function ProductView({ detail, selected, refresh }) {
 
   const rateRows = production.map(([code, label]) => ({ id: code, label }))
   const rateColumns = [
-    { label: 'Этап', cell: r => r.label },
+    { label: 'Этап', primary: true, cell: r => r.label },
     { label: 'Операция', cell: r => actionLabels[r.id] },
     { label: 'Единица выработки', cell: () => 'компл.' },
     { label: 'Расценка', align: 'right', cell: r => <strong>{money(v?.rates[r.id] || 0)}</strong> },
@@ -543,6 +681,7 @@ function ProductView({ detail, selected, refresh }) {
             <Table
               label="Нормы материалов"
               rows={v.norms}
+              empty="Материалы не указаны — списание сырья для этой версии не выполняется"
               rowKey={r => r.stage + '-' + r.item_id}
               columns={materialColumns}
             />
@@ -566,13 +705,15 @@ function ProductView({ detail, selected, refresh }) {
                 <th scope="row" colSpan={3}>
                   Сдельные начисления на полный цикл (за 1 компл.)
                 </th>
-                <td className="right">
+                <td className="right" data-label="Расценка">
                   <strong>{money(totalRates)}</strong>
                 </td>
                 {compareTarget && (
                   <>
-                    <td className="right">{money(compareTotalRates)}</td>
-                    <td className="right">
+                    <td className="right" data-label={'Было (в. ' + compareTarget.version + ')'}>
+                      {money(compareTotalRates)}
+                    </td>
+                    <td className="right" data-label="Разница">
                       <span
                         className={
                           totalRates - compareTotalRates > 0
@@ -699,7 +840,7 @@ export function People() {
           page={page}
           setPage={setPage}
           columns={[
-            { label: 'Сотрудник', cell: r => <a href={href('/people/' + r.id)}>{r.name}</a> },
+            { label: 'Сотрудник', primary: true, cell: r => <a href={href('/people/' + r.id)}>{r.name}</a> },
             { label: 'Должность', cell: r => r.position },
             { label: 'Участок', cell: r => stages[r.stage] || r.stage },
             { label: 'Дата приёма', cell: r => dayText(r.hired_on) },
@@ -891,6 +1032,7 @@ export function StaffDetail({ id }) {
                     columns={[
                       {
                         label: 'Дата / документ',
+                        primary: true,
                         cell: r => (
                           <a href={href('/reports/' + r.doc_id)}>
                             {dayText(r.date)} · {r.code}
@@ -908,11 +1050,11 @@ export function StaffDetail({ id }) {
                           <th scope="row" colSpan={2}>
                             Итого за период
                           </th>
-                          <td className="right">
+                          <td className="right" data-label="Выработка">
                             <strong>{qty(quantity)} компл.</strong>
                           </td>
-                          <td className="right">—</td>
-                          <td className="right">
+                          <td className="right" />
+                          <td className="right" data-label="Начислено">
                             <strong>{money(amount)}</strong>
                           </td>
                         </tr>
@@ -1050,12 +1192,12 @@ export function Payroll() {
                     rows.length > 0 ? (
                       <tr>
                         <th scope="row">Итого по выборке</th>
-                        <td>{number(rows.length)} чел.</td>
-                        <td className="right">
+                        <td data-label="Исполнителей">{number(rows.length)} чел.</td>
+                        <td className="right" data-label="Комплектов">
                           <strong>{qty(totalQty)}</strong>
                         </td>
-                        <td className="right">—</td>
-                        <td className="right">
+                        <td className="right" />
+                        <td className="right" data-label="Начислено">
                           <strong>{money(totalAmount)}</strong>
                         </td>
                       </tr>
@@ -1190,7 +1332,7 @@ export function Month() {
                 <div className="cost-breakdown">
                   <div className="chart-title">
                     <h3>Движение по складам Иваново</h3>
-                    <span>приход · расход · остаток на конец</span>
+                    <span>приход / расход, компл.</span>
                   </div>
                   <div className="output-chart">
                     {d.flows.map(r => (
@@ -1207,7 +1349,7 @@ export function Month() {
                           />
                         </div>
                         <strong className="right">
-                          +{qty(r.incoming)} / −{qty(r.outgoing)} · ост. {qty(r.closing)}
+                          +{qty(r.incoming)} / −{qty(r.outgoing)}
                         </strong>
                       </div>
                     ))}
@@ -1220,6 +1362,7 @@ export function Month() {
                   columns={[
                     {
                       label: 'Склад',
+                      primary: true,
                       cell: r => (
                         <a href={href('/stock/' + r.id + '?tab=history&start=' + monthStart + '&end=' + monthEnd)}>
                           {r.name}
@@ -1235,10 +1378,10 @@ export function Month() {
                   footer={
                     <tr>
                       <th scope="row">Итого по складам изделий</th>
-                      <td className="right">{qty(totalOpening)}</td>
-                      <td className="right">{qty(totalIncoming)}</td>
-                      <td className="right">{qty(totalOutgoing)}</td>
-                      <td className="right">
+                      <td className="right" data-label="На начало">{qty(totalOpening)}</td>
+                      <td className="right" data-label="Приход">{qty(totalIncoming)}</td>
+                      <td className="right" data-label="Расход">{qty(totalOutgoing)}</td>
+                      <td className="right" data-label="На конец">
                         <strong>{qty(totalClosing)}</strong>
                       </td>
                     </tr>
@@ -1277,8 +1420,11 @@ export function Month() {
                 <div className="cost-breakdown">
                   <div className="chart-title">
                     <h3>Структура себестоимости выпуска</h3>
-                    <span>НЗП нач. + материалы + зарплата + накладные − НЗП кон.</span>
+                    <span>₽ · доля</span>
                   </div>
+                  <small className="muted">
+                    НЗП на начало + Материалы + Сдельная оплата + Прочие затраты − НЗП на конец
+                  </small>
                   {grossCost > 0 && (
                     <>
                       <div className="cost-stack" role="img" aria-label="Структура затрат за месяц">
@@ -1312,7 +1458,10 @@ export function Month() {
                       const share = grossCost > 0 ? Math.round((Math.abs(val) / grossCost) * 100) : 0
                       return (
                         <div className="cost-row" key={key}>
-                          <span>{isDeduction ? '− ' + label : '+ ' + label}</span>
+                          <span>
+                            {isDeduction ? '− ' + label : '+ ' + label}{' '}
+                            <small className="muted">({share}%)</small>
+                          </span>
                           <div className="bar-track" aria-hidden="true">
                             <div
                               className={'bar-fill ' + (isDeduction ? 'cost-deduction' : key === 'wages' ? 'sew' : key === 'material' ? 'cut' : 'pack')}
@@ -1321,7 +1470,7 @@ export function Month() {
                           </div>
                           <strong className={isDeduction && val > 0 ? 'negative right' : 'right'}>
                             {isDeduction && val > 0 ? '−' : ''}
-                            {money(val)} · {share}%
+                            {money(val)}
                           </strong>
                         </div>
                       )
@@ -1334,7 +1483,7 @@ export function Month() {
                   rowKey={r => r.key}
                   label="Себестоимость"
                   columns={[
-                    { label: 'Статья затрат', cell: r => r.label },
+                    { label: 'Статья затрат', primary: true, cell: r => r.label },
                     {
                       label: 'В расчёте',
                       cell: r => (r.kind === 'deduction' ? 'Вычитается (остаток НЗП)' : 'Увеличивает себестоимость')
@@ -1435,7 +1584,10 @@ export function Settings() {
                   ['Организация', settings.company],
                   [
                     'Открытый расчётный период',
-                    <Status value="posted" label={monthText(settings.open_month) + ' (с ' + dayText(settings.open_month + '-01') + ')'} />
+                    <div className="assignment-help">
+                      <Status value="posted" label={monthText(settings.open_month)} />
+                      <small className="muted">с {dayText(settings.open_month + '-01')}</small>
+                    </div>
                   ]
                 ]}
               />

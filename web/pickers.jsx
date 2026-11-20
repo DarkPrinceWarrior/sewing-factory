@@ -109,14 +109,24 @@ export function SearchPicker({
       const anchor = root.current || input.current
       if (!anchor) return
       const rect = anchor.getBoundingClientRect()
-      const margin = 12
-      const minW = Math.min(260, window.innerWidth - margin * 2)
-      const width = Math.min(Math.max(rect.width, minW), window.innerWidth - margin * 2)
-      const left = Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin))
-      const high = Math.max(56, rect.top - 14)
-      const low = Math.max(56, window.innerHeight - rect.bottom - 14)
-      const above = low < 180 && high > low
-      const maxHeight = Math.min(280, above ? high : low)
+      const vv = window.visualViewport
+      const vw = vv ? vv.width : window.innerWidth
+      const vh = vv ? vv.height : window.innerHeight
+      const vTop = vv ? vv.offsetTop : 0
+      const vLeft = vv ? vv.offsetLeft : 0
+      const isNarrow = vw <= 640
+      const margin = isNarrow ? 8 : 12
+      const minW = Math.min(260, vw - margin * 2)
+      const width = isNarrow
+        ? Math.max(160, vw - margin * 2)
+        : Math.min(Math.max(rect.width, minW), vw - margin * 2)
+      const left = isNarrow
+        ? vLeft + margin
+        : Math.max(vLeft + margin, Math.min(rect.left, vLeft + vw - width - margin))
+      const high = Math.max(56, rect.top - vTop - 10)
+      const low = Math.max(56, vTop + vh - rect.bottom - 10)
+      const above = low < (isNarrow ? 150 : 180) && high > low
+      const maxHeight = Math.min(isNarrow ? 240 : 280, above ? high : low)
       setPosition({
         left,
         width,
@@ -131,10 +141,14 @@ export function SearchPicker({
     }
     place()
     window.addEventListener('resize', place)
+    window.visualViewport?.addEventListener('resize', place)
+    window.visualViewport?.addEventListener('scroll', place)
     document.addEventListener('scroll', place, true)
     document.addEventListener('pointerdown', outside, true)
     return () => {
       window.removeEventListener('resize', place)
+      window.visualViewport?.removeEventListener('resize', place)
+      window.visualViewport?.removeEventListener('scroll', place)
       document.removeEventListener('scroll', place, true)
       document.removeEventListener('pointerdown', outside, true)
     }

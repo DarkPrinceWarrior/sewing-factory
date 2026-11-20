@@ -139,6 +139,28 @@ export function useAction() {
   return { busy, error, run, clear: () => setError(null) }
 }
 
+export function useIsMobile(breakpoint = 768) {
+  const query = `(max-width: ${breakpoint}px)`
+  const [mobile, setMobile] = useState(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(query).matches
+      : false
+  )
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined
+    const mq = window.matchMedia(query)
+    const onChange = e => setMobile(e.matches)
+    setMobile(mq.matches)
+    if (mq.addEventListener) mq.addEventListener('change', onChange)
+    else mq.addListener(onChange)
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', onChange)
+      else mq.removeListener(onChange)
+    }
+  }, [query])
+  return mobile
+}
+
 /* --- Toast Notifications --- */
 const noopToast = Object.assign(() => {}, {
   notify: () => {},
@@ -405,6 +427,7 @@ export function Select({
   const rootRef = useRef(null)
   const triggerRef = useRef(null)
   const menuRef = useRef(null)
+  const isMobile = useIsMobile(768)
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const [position, setPosition] = useState(null)
@@ -607,43 +630,78 @@ export function Select({
         />
       )}
       {open && createPortal(
-        <div
-          id={menuId}
-          ref={menuRef}
-          className="select-menu"
-          role="listbox"
-          aria-label={ariaLabel || placeholder || 'Список'}
-          data-picker-portal="true"
-          data-select-portal="true"
-          data-escape-boundary="true"
-          style={position || { visibility: 'hidden' }}
-        >
-          {options.map((opt, i) => {
-            const isSelected = opt.value === currentStr
-            const isActive = i === safeIndex
-            return (
-              <div
-                key={opt.value + '-' + i}
-                id={`${menuId}-${i}`}
-                role="option"
-                aria-selected={isSelected}
-                aria-disabled={opt.disabled || undefined}
-                className={'select-option' + (isSelected ? ' is-selected' : '') + (isActive ? ' is-active' : '') + (opt.disabled ? ' is-disabled' : '')}
-                onMouseMove={() => { if (!opt.disabled && safeIndex !== i) setActiveIndex(i) }}
-                onPointerDown={e => e.preventDefault()}
-                onClick={() => { if (!opt.disabled) choose(opt.value) }}
-              >
-                <span className="select-option-label">{opt.label}</span>
-                {isSelected && (
-                  <svg className="select-check" viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="m3.5 8.2 3 3 6-6.4" />
-                  </svg>
-                )}
+        <>
+          {isMobile && (
+            <div
+              className="popover-scrim"
+              aria-hidden="true"
+              data-picker-portal="true"
+              data-select-portal="true"
+              onPointerDown={e => e.preventDefault()}
+              onClick={() => {
+                setOpen(false)
+                triggerRef.current?.focus({ preventScroll: true })
+              }}
+            />
+          )}
+          <div
+            id={menuId}
+            ref={menuRef}
+            className={'select-menu' + (isMobile ? ' is-mobile-sheet' : '')}
+            role="listbox"
+            aria-label={ariaLabel || placeholder || 'Список'}
+            data-picker-portal="true"
+            data-select-portal="true"
+            data-escape-boundary="true"
+            style={isMobile ? undefined : (position || { visibility: 'hidden' })}
+          >
+            {isMobile && <div className="sheet-handle" aria-hidden="true" />}
+            {isMobile && (
+              <div className="select-sheet-head">
+                <span className="select-sheet-title">{ariaLabel || placeholder || 'Выберите значение'}</span>
+                <button
+                  type="button"
+                  className="icon-button select-sheet-close"
+                  aria-label="Закрыть"
+                  onPointerDown={e => e.preventDefault()}
+                  onClick={() => {
+                    setOpen(false)
+                    triggerRef.current?.focus({ preventScroll: true })
+                  }}
+                >
+                  ×
+                </button>
               </div>
-            )
-          })}
-          {!options.length && <div className="picker-empty" role="status">Нет вариантов</div>}
-        </div>,
+            )}
+            <div className="select-options-list">
+              {options.map((opt, i) => {
+                const isSelected = opt.value === currentStr
+                const isActive = i === safeIndex
+                return (
+                  <div
+                    key={opt.value + '-' + i}
+                    id={`${menuId}-${i}`}
+                    role="option"
+                    aria-selected={isSelected}
+                    aria-disabled={opt.disabled || undefined}
+                    className={'select-option' + (isSelected ? ' is-selected' : '') + (isActive ? ' is-active' : '') + (opt.disabled ? ' is-disabled' : '')}
+                    onMouseMove={() => { if (!opt.disabled && safeIndex !== i) setActiveIndex(i) }}
+                    onPointerDown={e => e.preventDefault()}
+                    onClick={() => { if (!opt.disabled) choose(opt.value) }}
+                  >
+                    <span className="select-option-label">{opt.label}</span>
+                    {isSelected && (
+                      <svg className="select-check" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="m3.5 8.2 3 3 6-6.4" />
+                      </svg>
+                    )}
+                  </div>
+                )
+              })}
+              {!options.length && <div className="picker-empty" role="status">Нет вариантов</div>}
+            </div>
+          </div>
+        </>,
         triggerRef.current?.closest('dialog') || document.body
       )}
     </div>
@@ -713,6 +771,7 @@ export function DateControl({
   const rootRef = useRef(null)
   const triggerRef = useRef(null)
   const popoverRef = useRef(null)
+  const isMobile = useIsMobile(768)
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState(null)
 
@@ -884,17 +943,31 @@ export function DateControl({
         />
       )}
       {open && createPortal(
-        <div
-          id={panelId}
-          ref={popoverRef}
-          className="calendar-popover"
-          role="dialog"
-          aria-modal="false"
-          aria-label={month ? 'Выбор месяца' : 'Выбор даты'}
-          data-picker-portal="true"
-          data-escape-boundary="true"
-          style={position || { visibility: 'hidden' }}
-        >
+        <>
+          {isMobile && (
+            <div
+              className="popover-scrim"
+              aria-hidden="true"
+              data-picker-portal="true"
+              onPointerDown={e => e.preventDefault()}
+              onClick={() => {
+                setOpen(false)
+                triggerRef.current?.focus({ preventScroll: true })
+              }}
+            />
+          )}
+          <div
+            id={panelId}
+            ref={popoverRef}
+            className={'calendar-popover' + (isMobile ? ' is-mobile-sheet' : '')}
+            role="dialog"
+            aria-modal="false"
+            aria-label={month ? 'Выбор месяца' : 'Выбор даты'}
+            data-picker-portal="true"
+            data-escape-boundary="true"
+            style={isMobile ? undefined : (position || { visibility: 'hidden' })}
+          >
+            {isMobile && <div className="sheet-handle" aria-hidden="true" />}
           <div className="calendar-nav">
             <button
               type="button"
@@ -1004,13 +1077,28 @@ export function DateControl({
             >
               {month ? 'Текущий месяц' : 'Сегодня'}
             </button>
-            {!required && normalizedValue && (
-              <button type="button" className="text-button" onClick={() => choose('')}>
-                Очистить
-              </button>
-            )}
+            <div className="calendar-footer-actions" style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
+              {!required && normalizedValue && (
+                <button type="button" className="text-button" onClick={() => choose('')}>
+                  Очистить
+                </button>
+              )}
+              {isMobile && (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => {
+                    setOpen(false)
+                    triggerRef.current?.focus({ preventScroll: true })
+                  }}
+                >
+                  Закрыть
+                </button>
+              )}
+            </div>
           </div>
-        </div>,
+          </div>
+        </>,
         triggerRef.current?.closest('dialog') || document.body
       )}
     </span>
@@ -1136,12 +1224,16 @@ export function Table({
   label = 'Таблица',
   rowKey,
   hasPager = false,
+  mobileCards = true,
   footer = null,
   className = '',
   onRowClick
 }) {
+  const explicitPrimary = columns.findIndex(c => c.primary)
+  const primaryIndex = explicitPrimary >= 0 ? explicitPrimary : 0
+
   return (
-    <div className={'table-frame' + (hasPager ? ' has-pagination' : '') + (className ? ' ' + className : '')}>
+    <div className={'table-frame' + (hasPager ? ' has-pagination' : '') + (mobileCards ? ' mobile-cards' : '') + (className ? ' ' + className : '')}>
       <div className="table-scroll" role="region" aria-label={label} tabIndex={0}>
         <table aria-label={label}>
           <colgroup>
@@ -1163,11 +1255,27 @@ export function Table({
                 className={onRowClick ? 'is-clickable' : undefined}
                 onClick={onRowClick ? () => onRowClick(row, i) : undefined}
               >
-                {columns.map((col, j) => (
-                  <td key={j} className={[col.align, col.className].filter(Boolean).join(' ')}>
-                    {col.cell(row, i)}
-                  </td>
-                ))}
+                {columns.map((col, j) => {
+                  const isPrimary = j === primaryIndex
+                  const mobileKind = col.mobileKind || (
+                    ['Действия', ''].includes(col.label)
+                      ? 'actions'
+                      : col.label === 'Статус'
+                        ? 'status'
+                        : undefined
+                  )
+                  return (
+                    <td
+                      key={j}
+                      className={[col.align, col.className].filter(Boolean).join(' ')}
+                      data-label={col.label || undefined}
+                      data-primary={isPrimary ? 'true' : undefined}
+                      data-kind={mobileKind}
+                    >
+                      {col.cell(row, i)}
+                    </td>
+                  )
+                })}
               </tr>
             ))}
             {!rows.length && (
@@ -1307,7 +1415,13 @@ export function QuickFilters({ active = false, activeCount = 0, label = 'Быс�
   const panelId = useId()
   const disclosure = useRef(null)
   const panelRef = useRef(null)
+  const isMobile = useIsMobile(768)
+  const [mobileOpen, setMobileOpen] = useState(false)
   const [alignRight, setAlignRight] = useState(false)
+
+  useEffect(() => {
+    if (!isMobile) setMobileOpen(false)
+  }, [isMobile])
 
   function closePanel() {
     if (disclosure.current?.open) {
@@ -1328,8 +1442,9 @@ export function QuickFilters({ active = false, activeCount = 0, label = 'Быс�
   }, [])
 
   useEffect(() => {
+    if (isMobile) return undefined
     const element = disclosure.current
-    if (!element) return
+    if (!element) return undefined
     const outside = event => {
       if (element.open && !popupContains(element, event.target)) element.open = false
     }
@@ -1351,9 +1466,48 @@ export function QuickFilters({ active = false, activeCount = 0, label = 'Быс�
       document.removeEventListener('keydown', escape)
       window.removeEventListener('resize', placePanel)
     }
-  }, [placePanel])
+  }, [isMobile, placePanel])
 
   const count = activeCount > 0 ? activeCount : (active ? 1 : 0)
+
+  if (isMobile) {
+    return (
+      <div className={'quick-filters' + (className ? ' ' + className : '')}>
+        <button
+          type="button"
+          className="button secondary quick-filters-btn"
+          aria-expanded={mobileOpen}
+          aria-controls={mobileOpen ? panelId : undefined}
+          onClick={() => setMobileOpen(true)}
+        >
+          <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14l-5.5 6.5v4L8.5 16v-5.5L3 4Z" /></svg>
+          <span>{label}</span>
+          {count > 0 && <span className="filter-count" aria-label="Применены фильтры">{activeCount > 0 ? activeCount : ''}</span>}
+        </button>
+        <Sheet
+          open={mobileOpen}
+          onClose={() => setMobileOpen(false)}
+          title={label}
+          footer={
+            <>
+              {onReset && (
+                <Button kind="ghost" disabled={!hasActive} onClick={onReset}>
+                  Сбросить
+                </Button>
+              )}
+              <Button kind="primary" onClick={() => setMobileOpen(false)}>
+                Готово
+              </Button>
+            </>
+          }
+        >
+          <div id={panelId} className="quick-sheet-grid">
+            {children}
+          </div>
+        </Sheet>
+      </div>
+    )
+  }
 
   return (
     <details
@@ -1526,9 +1680,129 @@ export function RegistryTools({ state, placeholder, periodLabel = false, total, 
   )
 }
 
-/* --- Modals & Dialogs --- */
-let openDialogCount = 0
+/* --- Modals, Dialogs & Bottom Sheets --- */
+let scrollLockCount = 0
 let savedBodyOverflow = ''
+const activeSheetStack = []
+
+function lockBodyScroll() {
+  if (scrollLockCount === 0) {
+    savedBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.body.classList.add('sheet-open')
+  }
+  scrollLockCount += 1
+}
+
+function unlockBodyScroll() {
+  scrollLockCount = Math.max(0, scrollLockCount - 1)
+  if (scrollLockCount === 0) {
+    document.body.style.overflow = savedBodyOverflow
+    document.body.classList.remove('sheet-open')
+  }
+}
+
+export function Sheet({
+  open = false,
+  onClose,
+  title,
+  subtitle,
+  footer = null,
+  closeDisabled = false,
+  portalTarget,
+  className = '',
+  children
+}) {
+  const titleId = useId()
+  const sheetRef = useRef(null)
+  const backdropDown = useRef(false)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  const closeDisabledRef = useRef(closeDisabled)
+  closeDisabledRef.current = closeDisabled
+
+  useEffect(() => {
+    if (!open) return undefined
+    const opener = document.activeElement
+    const token = Symbol('sheet')
+    activeSheetStack.push(token)
+    lockBodyScroll()
+
+    const handleKeyDown = (event) => {
+      if (
+        event.key === 'Escape' &&
+        !event.defaultPrevented &&
+        activeSheetStack[activeSheetStack.length - 1] === token
+      ) {
+        if (closeDisabledRef.current) return
+        if (document.querySelector('[data-picker-portal]')) return
+        event.preventDefault()
+        onCloseRef.current?.()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      const idx = activeSheetStack.lastIndexOf(token)
+      if (idx !== -1) activeSheetStack.splice(idx, 1)
+      unlockBodyScroll()
+      if (opener && opener.isConnected && opener !== document.body && typeof opener.focus === 'function') {
+        opener.focus({ preventScroll: true })
+      }
+    }
+  }, [open])
+
+  if (!open) return null
+
+  const content = (
+    <div
+      className="sheet-backdrop"
+      role="presentation"
+      onPointerDown={e => { backdropDown.current = (e.target === e.currentTarget) }}
+      onClick={e => {
+        if (!closeDisabled && backdropDown.current && e.target === e.currentTarget) {
+          onCloseRef.current?.()
+        }
+        backdropDown.current = false
+      }}
+    >
+      <div
+        ref={sheetRef}
+        className={'sheet' + (className ? ' ' + className : '')}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+      >
+        <div className="sheet-handle" aria-hidden="true" />
+        {(title || subtitle || onClose) && (
+          <header className="sheet-head">
+            <div className="sheet-head-copy">
+              {title && <h2 id={titleId} className="sheet-title">{title}</h2>}
+              {subtitle && <p className="sheet-sub">{subtitle}</p>}
+            </div>
+            {onClose && (
+              <Button
+                className="icon-only sheet-close"
+                aria-label="Закрыть"
+                disabled={closeDisabled}
+                onClick={() => { if (!closeDisabled) onCloseRef.current?.() }}
+              >
+                ×
+              </Button>
+            )}
+          </header>
+        )}
+        <div className="sheet-body">{children}</div>
+        {footer && <footer className="sheet-footer">{footer}</footer>}
+      </div>
+    </div>
+  )
+
+  return typeof document !== 'undefined'
+    ? createPortal(content, portalTarget || document.body)
+    : content
+}
 
 export function Dialog({ title, close, children, footer = null, closeDisabled = false, className = '' }) {
   const ref = useRef(null)
@@ -1539,11 +1813,7 @@ export function Dialog({ title, close, children, footer = null, closeDisabled = 
   useEffect(() => {
     const el = ref.current
     const opener = document.activeElement
-    if (openDialogCount === 0) {
-      savedBodyOverflow = document.body.style.overflow
-      document.body.style.overflow = 'hidden'
-    }
-    openDialogCount += 1
+    lockBodyScroll()
 
     if (el && !el.open) el.showModal()
 
@@ -1554,10 +1824,7 @@ export function Dialog({ title, close, children, footer = null, closeDisabled = 
 
     return () => {
       if (el?.open) el.close()
-      openDialogCount = Math.max(0, openDialogCount - 1)
-      if (openDialogCount === 0) {
-        document.body.style.overflow = savedBodyOverflow
-      }
+      unlockBodyScroll()
       if (opener && opener.isConnected && opener !== document.body && typeof opener.focus === 'function') {
         opener.focus({ preventScroll: true })
       }
@@ -1582,6 +1849,7 @@ export function Dialog({ title, close, children, footer = null, closeDisabled = 
       }}
     >
       <section className="dialog-body dialog-layout dialog-shell">
+        <div className="dialog-handle" aria-hidden="true" />
         <header className="card-title dialog-head">
           <h2 id={id}>{title}</h2>
           <Button

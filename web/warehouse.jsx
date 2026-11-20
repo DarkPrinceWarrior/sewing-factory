@@ -45,6 +45,15 @@ const centralTabs = [
 ]
 const payModes = Object.entries(payments)
 const payBarClass = {card: 'cut', cash: 'pack', transfer: 'sew'}
+const materialUnits = [
+  ['м', 'м (метры)'],
+  ['шт.', 'шт. (штуки)'],
+  ['кг', 'кг (килограммы)'],
+  ['рул.', 'рул. (рулоны)'],
+  ['уп.', 'уп. (упаковки)'],
+  ['компл.', 'компл. (комплекты)']
+]
+const isDecimalUnit = (unit) => unit === 'м' || unit === 'кг'
 const total = (rows, field) => rows.reduce((sum, r) => sum + (r[field] || 0), 0)
 const input = (set, key) => e => set(f => ({...f, [key]: e.target.value}))
 const nowrap = (content) => <span style={{whiteSpace: 'nowrap'}}>{content}</span>
@@ -82,6 +91,47 @@ function WarehouseForm({close, done}) {
   )
 }
 
+function NewMaterialDialog({close, done}) {
+  const model = useAction()
+  const toast = useToast()
+  const [data, set] = useState({name: '', unit: 'м', category: 'Сырьё', sku: ''})
+
+  return (
+    <Dialog title="Новый материал" closeDisabled={model.busy} close={close}>
+      <form onSubmit={e => {
+        e.preventDefault()
+        model.run(async () => {
+          const created = await api('/materials', 'POST', {
+            name: data.name.trim(),
+            unit: data.unit,
+            category: data.category.trim() || 'Сырьё',
+            sku: data.sku.trim()
+          })
+          toast.success('Материал «' + created.name + '» добавлен')
+          done(created)
+        })
+      }}>
+        <div className="form-grid">
+          <Field label="Название" wide>
+            <input required value={data.name} onChange={input(set, 'name')} maxLength="180" placeholder="Например: Бязь набивная 220 см"/>
+          </Field>
+          <Field label="Единица измерения">
+            <Select entries={materialUnits} value={data.unit} onChange={input(set, 'unit')}/>
+          </Field>
+          <Field label="Категория">
+            <input required value={data.category} onChange={input(set, 'category')} maxLength="180" placeholder="Сырьё"/>
+          </Field>
+          <Field label="Артикул (необязательно)" wide help="Если оставить пустым, артикул RAW-XXX сформируется автоматически.">
+            <input value={data.sku} onChange={input(set, 'sku')} maxLength="60" placeholder="Например: МТ-015"/>
+          </Field>
+        </div>
+        <ErrorBox error={model.error}/>
+        <FormActions busy={model.busy} cancel={close} submit="Создать материал"/>
+      </form>
+    </Dialog>
+  )
+}
+
 function CentralInventory({add, setAdd}) {
   const ws = useWorkspace()
   const isMaster = ws.user.role === 'master'
@@ -96,6 +146,7 @@ function CentralInventory({add, setAdd}) {
   const columns = [
     {
       label: 'Склад',
+      primary: true,
       width: canWrite ? '26%' : '30%',
       cell: w => (
         <>
@@ -186,9 +237,11 @@ export function CentralStock({tab = 'inventory'}) {
       actions={
         tab === 'transfers'
           ? <Button kind="primary" to="/stock/transfers/new">Новое перемещение</Button>
-          : tab === 'access'
-            ? <Button kind="primary" onClick={() => setGrant(true)}>Назначить доступ</Button>
-            : null
+          : tab === 'sales' && roleCanWrite(user)
+            ? <Button kind="primary" to="/sales/new?warehouse=5">Новая продажа</Button>
+            : tab === 'access'
+              ? <Button kind="primary" onClick={() => setGrant(true)}>Назначить доступ</Button>
+              : null
       }
     >
       {tabs.length > 1 && (
@@ -235,13 +288,13 @@ export function WarehouseDetail({id, regional = false}) {
         const columns = [
           ...(isRaw
             ? [
-                {label: 'Материал', cell: r => <a href={href('/stock/1/items/' + r.item_id)}>{r.name}</a>},
+                {label: 'Материал', primary: true, cell: r => <a href={href('/stock/1/items/' + r.item_id)}>{r.name}</a>},
                 {label: 'Единица', cell: r => r.unit},
                 {label: 'На начало дня', align: 'right', cell: r => qty(r.quantity - r.incoming + r.outgoing) + ' ' + r.unit}
               ]
             : [
                 {label: 'Артикул', cell: r => nowrap(r.sku)},
-                {label: 'Изделие', cell: itemText}
+                {label: 'Изделие', primary: true, cell: itemText}
               ]),
           {label: 'Поступило сегодня', align: 'right', cell: r => qty(r.incoming) + ' ' + r.unit},
           {label: 'Выбыло сегодня', align: 'right', cell: r => qty(r.outgoing) + ' ' + r.unit},
@@ -257,16 +310,16 @@ export function WarehouseDetail({id, regional = false}) {
 
         const footer = rows.length > 0 ? (
           <tr>
-            <td colSpan={isRaw ? 2 : 2}><strong>Итого ({number(rows.length)} поз.)</strong></td>
+            <td colSpan={2}><strong>Итого ({number(rows.length)} поз.)</strong></td>
             {isRaw && (
-              <td className="right">
+              <td className="right" data-label="На начало">
                 {singleUnit ? qty(rows.reduce((s, r) => s + r.quantity - r.incoming + r.outgoing, 0)) + ' ' + singleUnit : '—'}
               </td>
             )}
-            <td className="right">{singleUnit ? qty(total(rows, 'incoming')) + ' ' + singleUnit : '—'}</td>
-            <td className="right">{singleUnit ? qty(total(rows, 'outgoing')) + ' ' + singleUnit : '—'}</td>
-            <td className="right"><strong>{singleUnit ? qty(total(rows, 'quantity')) + ' ' + singleUnit : '—'}</strong></td>
-            <td className="right">
+            <td className="right" data-label="Поступило">{singleUnit ? qty(total(rows, 'incoming')) + ' ' + singleUnit : '—'}</td>
+            <td className="right" data-label="Выбыло">{singleUnit ? qty(total(rows, 'outgoing')) + ' ' + singleUnit : '—'}</td>
+            <td className="right" data-label="Остаток"><strong>{singleUnit ? qty(total(rows, 'quantity')) + ' ' + singleUnit : '—'}</strong></td>
+            <td className="right" data-label={regional ? 'По прайсу' : 'Стоимость'}>
               <strong>
                 {regional
                   ? money(rows.reduce((s, r) => s + Math.round((r.quantity || 0) * (r.price || 0) / 1000), 0))
@@ -283,7 +336,12 @@ export function WarehouseDetail({id, regional = false}) {
             actions={
               <>
                 {isRaw && roleCanWrite(ws.user) && <Button kind="primary" to="/stock/receipts/new">Оформить приход</Button>}
-                {w.kind === 'finished' && roleCanWrite(ws.user) && <Button kind="primary" to="/stock/transfers/new">Переместить</Button>}
+                {w.kind === 'finished' && roleCanWrite(ws.user) && (
+                  <>
+                    <Button kind="secondary" to="/stock/transfers/new">Переместить</Button>
+                    <Button kind="primary" to="/sales/new?warehouse=5">Новая продажа</Button>
+                  </>
+                )}
                 {regional && <Button kind="primary" to="/sales/new">Новая продажа</Button>}
               </>
             }
@@ -409,7 +467,7 @@ function StockHistory({id, items, material}) {
               empty="Движений за выбранный период не найдено"
               columns={[
                 {label: 'Дата и время', cell: r => nowrap(dateTime(r.happened_at))},
-                {label: 'Документ', cell: moveLink},
+                {label: 'Документ', primary: true, cell: moveLink},
                 {label: 'Операция', cell: r => movementName[r.operation] || r.operation},
                 ...(!material ? [{label: 'Товар', cell: itemText}] : []),
                 {
@@ -465,7 +523,9 @@ function DocumentFilters({state, kind, regional, total}) {
         <Field label="Склад" wide={kind === 'sale'}>
           <Select
             placeholder="Все склады"
-            entries={warehouses.filter(w => w.kind === 'regional').map(w => [w.id, place(w)])}
+            entries={warehouses
+              .filter(w => kind === 'sale' ? ['finished', 'regional'].includes(w.kind) : w.kind === 'regional')
+              .map(w => [w.id, place(w)])}
             value={filters.warehouse}
             onChange={e => change('warehouse', e.target.value)}
           />
@@ -483,6 +543,7 @@ function DocumentTable({kind, regional, page, size = 15, setPage, setSize, optio
   const columns = [
     {
       label: 'Документ',
+      primary: true,
       cell: r => nowrap(<a href={href(regional ? (kind === 'sale' ? '/sales/' : '/receiving/') + r.id : documentPath(r))}>{r.code}</a>)
     },
     {label: 'Дата', cell: r => nowrap(kind === 'sale' ? dateTime(r.created_at) : dayText(r.date))},
@@ -495,7 +556,17 @@ function DocumentTable({kind, regional, page, size = 15, setPage, setSize, optio
         ? [{label: 'Город', cell: r => nowrap(r.source_city)}]
         : []),
     ...(kind === 'receipt'
-      ? [{label: 'Поставщик', cell: r => r.supplier}, {label: 'Накладная', cell: r => r.reference}]
+      ? [{
+          label: 'Поставщик',
+          cell: r => (
+            <>
+              <div>{r.supplier}</div>
+              {r.target_id && r.target_id !== 1 && r.target_name && (
+                <small className="cell-secondary">{r.target_name}{r.target_city ? ' · ' + r.target_city : ''}</small>
+              )}
+            </>
+          )
+        }, {label: 'Накладная', cell: r => r.reference}]
       : [{label: 'Комплектов', align: 'right', cell: r => qty(r.quantity)}]),
     {
       label: 'Сумма',
@@ -585,9 +656,9 @@ function BreakdownBars({rows, totalValue, labelFor, keyFor, metaFor, colorFor, o
         const label = labelFor(r)
         const meta = metaFor?.(r)
         return (
-          <div key={keyFor(r, idx)} style={{display: 'grid', gap: 6}}>
-            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12}}>
-              <span>
+          <div key={keyFor(r, idx)} style={{display: 'grid', gap: 6, minWidth: 0}}>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '4px 12px'}}>
+              <span style={{minWidth: 0}}>
                 {onSelect
                   ? <button type="button" className="text-button" onClick={() => onSelect(r)}>{label}</button>
                   : <strong>{label}</strong>}
@@ -714,15 +785,15 @@ function SalesOverview({regional = false}) {
                     footer={
                       <tr>
                         <td colSpan={2}><strong>Итого ({number(d.cities.length)} склад.)</strong></td>
-                        <td className="right"><strong>{qty(d.quantity)}</strong></td>
-                        <td className="right"><strong>{number(d.documents)}</strong></td>
-                        <td className="right"><strong>100%</strong></td>
-                        <td className="right"><strong>{money(d.total)}</strong></td>
-                        <td className="right"><strong>{money(d.cost)}</strong></td>
+                        <td className="right" data-label="Комплектов"><strong>{qty(d.quantity)}</strong></td>
+                        <td className="right" data-label="Продаж"><strong>{number(d.documents)}</strong></td>
+                        <td className="right" data-label="Доля"><strong>100%</strong></td>
+                        <td className="right" data-label="Сумма"><strong>{money(d.total)}</strong></td>
+                        <td className="right" data-label="Учётная стоимость"><strong>{money(d.cost)}</strong></td>
                       </tr>
                     }
                     columns={[
-                      {label: 'Город', cell: r => nowrap(r.city)},
+                      {label: 'Город', primary: true, cell: r => nowrap(r.city)},
                       {label: 'Склад', cell: r => <a href={href('/stock/' + r.id)}>{r.name}</a>},
                       {label: 'Комплектов', align: 'right', cell: r => qty(r.quantity)},
                       {label: 'Продаж', align: 'right', cell: r => number(r.docs)},
@@ -879,6 +950,7 @@ function WarehouseAccess({grant, setGrant}) {
               columns={[
                 {
                   label: 'Сотрудник',
+                  primary: true,
                   width: '27%',
                   cell: r => (
                     <>
@@ -942,24 +1014,27 @@ function WarehouseAccess({grant, setGrant}) {
 }
 
 const emptyLine = (key) => ({key, item_id: '', quantity: 1, price: ''})
-const makeLines = (rows) => rows.map((l, i) => ({key: i, item_id: l.item_id, quantity: l.quantity / 1000, price: l.price / 100}))
+const makeLines = (rows) => rows.map((l, i) => ({key: i, item_id: l.item_id, quantity: l.quantity / 1000, price: String(l.price / 100)}))
 
-function TransactionLines({lines, setLines, items, mode}) {
+function TransactionLines({lines, setLines, items, mode, onAddMaterial}) {
   const sale = mode === 'sale'
-  const stocked = mode !== 'receipt'
+  const receipt = mode === 'receipt'
+  const stocked = !receipt
   function setLine(key, props) { setLines(lines.map(l => l.key === key ? {...l, ...props} : l)) }
   function add() { setLines([...lines, emptyLine(Math.max(-1, ...lines.map(l => l.key)) + 1)]) }
   const used = lines.map(l => l.item_id)
+  const availableCount = items.filter(i => !stocked || i.quantity > 0).length
+  const canAddLine = receipt || lines.length < availableCount
 
   return (
     <div className="transaction-lines">
       {lines.map(l => {
         const item = items.find(x => x.id === l.item_id)
-        const price = sale ? (item ? item.price / 100 : 0) : l.price
-        const lineSum = Math.round((Number(price) || 0) * Number(l.quantity || 0) * 100)
+        const decimal = isDecimalUnit(item?.unit)
+        const lineSum = Math.round((Number(l.price) || 0) * Number(l.quantity || 0) * 100)
         return (
           <div className={'transaction-line' + (lines.length > 1 ? ' can-remove' : '')} key={l.key}>
-            <Field label={mode === 'receipt' ? 'Материал' : 'Товар'}>
+            <Field label={receipt ? 'Материал' : 'Товар'}>
               <SearchPicker
                 required
                 value={l.item_id}
@@ -968,7 +1043,7 @@ function TransactionLines({lines, setLines, items, mode}) {
                   .filter(i => i.id === l.item_id || (!used.includes(i.id) && (!stocked || i.quantity > 0)))
                   .map(i => [
                     i.id,
-                    mode === 'receipt' ? i.name : itemText(i),
+                    receipt ? i.name : itemText(i),
                     false,
                     stocked
                       ? `${i.sku} · ост. ${qty(i.quantity)} ${i.unit}${sale ? ' · ' + money(i.price) : ''}`
@@ -981,8 +1056,8 @@ function TransactionLines({lines, setLines, items, mode}) {
                     item_id: id || '',
                     quantity: 1,
                     price: mode === 'transfer' && p?.quantity
-                      ? Math.round(p.value * 1000 / p.quantity) / 100
-                      : p?.price / 100 || ''
+                      ? String(Math.round(p.value * 1000 / p.quantity) / 100)
+                      : p?.price ? String(p.price / 100) : ''
                   })
                 }}
               />
@@ -991,30 +1066,29 @@ function TransactionLines({lines, setLines, items, mode}) {
               <input
                 required
                 type="number"
-                min={item?.unit === 'м' ? '.001' : '1'}
-                step={item?.unit === 'м' ? '.001' : '1'}
+                inputMode={decimal ? 'decimal' : 'numeric'}
+                min={decimal ? '.001' : '1'}
+                step={decimal ? '.001' : '1'}
                 max={stocked && item ? Math.max(1, item.quantity / 1000) : 100000}
                 value={l.quantity}
                 onChange={e => setLine(l.key, {quantity: e.target.value})}
               />
             </Field>
             <Field label={sale ? 'Цена за комплект, ₽' : mode === 'transfer' ? 'Цена строки за ед., ₽' : 'Стоимость за ед., ₽'}>
-              {sale
-                ? <output className="control-output">{item ? money(item.price) : '—'}</output>
-                : (
-                  <input
-                    required
-                    type="number"
-                    step=".01"
-                    min=".01"
-                    max="20000000"
-                    value={price || ''}
-                    onChange={e => setLine(l.key, {price: e.target.value})}
-                  />
-                )}
+              <input
+                required
+                type="number"
+                inputMode="decimal"
+                step=".01"
+                min=".01"
+                max="20000000"
+                placeholder={sale ? 'Цена, ₽' : '0.00'}
+                value={l.price}
+                onChange={e => setLine(l.key, {price: e.target.value})}
+              />
             </Field>
             <Field label="Сумма">
-              <output className="control-output">{item || !sale ? money(lineSum) : '—'}</output>
+              <output className="control-output">{item || l.price ? money(lineSum) : '—'}</output>
             </Field>
             {lines.length > 1 && (
               <Button
@@ -1029,52 +1103,109 @@ function TransactionLines({lines, setLines, items, mode}) {
           </div>
         )
       })}
-      {items.some(i => !used.includes(i.id) && (!stocked || i.quantity > 0)) && lines.every(l => l.item_id) && (
-        <Button onClick={add}>Добавить позицию</Button>
+      {(canAddLine || (receipt && onAddMaterial)) && (
+        <div className="left-actions" style={{flexWrap: 'wrap'}}>
+          {canAddLine && <Button onClick={add}>Добавить позицию</Button>}
+          {receipt && onAddMaterial && <Button kind="secondary" onClick={onAddMaterial}>+ Новый материал</Button>}
+        </div>
       )}
     </div>
   )
 }
 
 function payloadLines(lines) {
-  return lines.map(l => ({item_id: Number(l.item_id), quantity: l.quantity, price: l.price || 0}))
+  return lines.map(l => ({item_id: Number(l.item_id), quantity: l.quantity, price: Number(l.price) || 0}))
 }
 
-function TransactionEditor({mode, document, inventory}) {
+function TransactionEditor({mode, document, inventory, initialSaleWarehouse}) {
   const ws = useWorkspace()
   const toast = useToast()
   const receipt = mode === 'receipt', sale = mode === 'sale'
+  const isRegional = ws.user.role === 'regional'
+  const saleWarehouses = ws.warehouses.filter(w => ['finished', 'regional'].includes(w.kind))
+
   const [day, setDay] = useState(document?.date || ws.today)
   const [supplier, setSupplier] = useState(document?.supplier || '')
   const [reference, setReference] = useState(document?.reference || '')
+  const [receiptTarget, setReceiptTarget] = useState(document?.target_id || 1)
+  const [saleWarehouseId, setSaleWarehouseId] = useState(() => {
+    if (!sale) return 0
+    if (isRegional) return ws.user.warehouse_id
+    if (initialSaleWarehouse && saleWarehouses.some(w => w.id === initialSaleWarehouse)) return initialSaleWarehouse
+    return saleWarehouses.find(w => w.kind === 'finished')?.id || saleWarehouses[0]?.id || 5
+  })
   const [memo, setMemo] = useState(document?.memo || '')
   const [target, setTarget] = useState(document?.target_id || '')
   const [payment, setPayment] = useState('card')
   const [lines, setLines] = useState(() => document ? makeLines(document.lines) : [emptyLine(0)])
+  const [extraMaterials, setExtraMaterials] = useState([])
+  const [newMaterialOpen, setNewMaterialOpen] = useState(false)
   const [requestKey] = useState(() => crypto.randomUUID())
   const [pending, setPending] = useState('')
   const state = useAction()
 
-  const items = receipt ? ws.items.filter(i => i.kind === 'raw') : inventory.rows.map(r => ({...r, id: r.item_id}))
-  const price = l => sale ? (items.find(i => i.id === l.item_id)?.price ?? 0) / 100 : Number(l.price || 0)
-  const totalValue = lines.reduce((s, l) => s + Math.round(price(l) * Number(l.quantity || 0) * 100), 0)
+  const saleInventory = useRemote(sale && saleWarehouseId ? '/warehouses/' + saleWarehouseId : null)
+  const activeSaleWarehouse = sale
+    ? (isRegional
+      ? {id: ws.user.warehouse_id, name: ws.user.warehouse_name, city: ws.user.city}
+      : saleWarehouses.find(w => w.id === Number(saleWarehouseId)) || saleInventory.data?.warehouse)
+    : null
+  const activeReceiptWarehouse = receipt
+    ? ws.warehouses.find(w => w.id === Number(receiptTarget))
+    : null
+
+  const items = receipt
+    ? [
+        ...ws.items.filter(i => i.kind === 'raw'),
+        ...extraMaterials.filter(m => !ws.items.some(i => i.id === m.id))
+      ]
+    : ((sale ? saleInventory.data?.rows : inventory?.rows) || [])
+        .filter(r => !r.kind || r.kind === 'product')
+        .map(r => ({...r, id: r.item_id}))
+
+  const totalValue = lines.reduce((s, l) => s + Math.round((Number(l.price) || 0) * Number(l.quantity || 0) * 100), 0)
   const title = sale
     ? 'Новая продажа'
     : receipt
       ? (document ? 'Поступление ' + document.code : 'Поступление сырья')
       : document ? 'Перемещение ' + document.code : 'Новое перемещение'
-  const back = sale ? '/sales' : receipt ? '/stock/1' : '/stock/transfers'
+  const back = sale
+    ? (isRegional ? '/sales' : '/stock/sales')
+    : receipt
+      ? '/stock/' + (document?.target_id || receiptTarget || 1)
+      : '/stock/transfers'
 
   const hasOverdraw = sale && lines.some(l => {
     const i = items.find(x => x.id === l.item_id)
     return i && Number(l.quantity || 0) > i.quantity / 1000
   })
 
+  function handleMaterialCreated(created) {
+    setExtraMaterials(prev => [...prev.filter(m => m.id !== created.id), created])
+    setLines(prev => {
+      const emptyIdx = prev.findIndex(l => !l.item_id)
+      if (emptyIdx >= 0) {
+        return prev.map((l, idx) => idx === emptyIdx ? {...l, item_id: created.id, quantity: 1} : l)
+      }
+      const nextKey = Math.max(-1, ...prev.map(l => l.key)) + 1
+      return [...prev, {key: nextKey, item_id: created.id, quantity: 1, price: ''}]
+    })
+    ws.refresh()
+    setNewMaterialOpen(false)
+  }
+
   const submit = async (post = true) => {
     let payload = {lines: payloadLines(lines), date: day, memo}
-    if (receipt) payload = {...payload, supplier, reference}
-    else if (sale) payload = {lines: payload.lines, payment, request_key: requestKey}
-    else payload = {...payload, target_id: Number(target)}
+    if (receipt) payload = {...payload, supplier, reference, target_id: Number(receiptTarget)}
+    else if (sale) {
+      payload = {
+        lines: payload.lines,
+        payment,
+        memo,
+        request_key: requestKey,
+        ...(!isRegional ? {warehouse_id: Number(saleWarehouseId)} : {})
+      }
+    } else payload = {...payload, target_id: Number(target)}
 
     const url = sale ? '/sales' : (receipt ? '/receipts' : '/transfers') + (document ? '/' + document.id : '')
     const sending = pending === 'send'
@@ -1092,8 +1223,10 @@ function TransactionEditor({mode, document, inventory}) {
     <Page
       title={title}
       subtitle={sale
-        ? ws.user.warehouse_name + ' · ' + ws.user.city
-        : (receipt ? 'Иваново · склад сырья' : 'Иваново · склад готовой продукции') + ' · ' + dayText(day)}
+        ? (activeSaleWarehouse ? activeSaleWarehouse.name + ' · ' + activeSaleWarehouse.city : '')
+        : (receipt
+          ? (activeReceiptWarehouse ? place(activeReceiptWarehouse) : 'Иваново · склад сырья')
+          : 'Иваново · склад готовой продукции') + ' · ' + dayText(day)}
       actions={document && <Status value={document.status}/>}
     >
       <Card title={sale ? 'Товар и оплата' : receipt ? 'Поступление от поставщика' : 'Маршрут и товары'}>
@@ -1107,12 +1240,44 @@ function TransactionEditor({mode, document, inventory}) {
             else state.run(() => submit(false))
           }}
         >
+          {sale && !isRegional && (
+            <div className="form-grid route-fields">
+              <Field label="Склад продажи" wide>
+                <SearchPicker
+                  required
+                  placeholder="Выберите склад"
+                  value={saleWarehouseId}
+                  entries={saleWarehouses.map(w => [w.id, place(w), false, w.address])}
+                  onChange={e => {
+                    const nextId = Number(e.target.value)
+                    if (nextId && nextId !== Number(saleWarehouseId)) {
+                      setSaleWarehouseId(nextId)
+                      setLines([emptyLine(0)])
+                      state.clear()
+                    }
+                  }}
+                />
+              </Field>
+            </div>
+          )}
+
           {!sale && (
             <div className="form-grid route-fields">
               {receipt ? (
-                <Field label="Поставщик">
-                  <input required value={supplier} onChange={e => setSupplier(e.target.value)} maxLength="180" placeholder="Название поставщика"/>
-                </Field>
+                <>
+                  <Field label="Поставщик">
+                    <input required value={supplier} onChange={e => setSupplier(e.target.value)} maxLength="180" placeholder="Название поставщика"/>
+                  </Field>
+                  <Field label="Склад поступления">
+                    <SearchPicker
+                      required
+                      placeholder="Выберите склад"
+                      value={receiptTarget}
+                      entries={ws.warehouses.map(w => [w.id, place(w), false, w.address])}
+                      onChange={e => setReceiptTarget(Number(e.target.value) || 1)}
+                    />
+                  </Field>
+                </>
               ) : (
                 <Field label="Склад-получатель">
                   <SearchPicker
@@ -1134,14 +1299,34 @@ function TransactionEditor({mode, document, inventory}) {
                 />
               </Field>
               {receipt && (
-                <Field label="Номер накладной" wide>
+                <Field label="Номер накладной">
                   <input required maxLength="180" value={reference} onChange={e => setReference(e.target.value)} placeholder="Например: УПД № 1245"/>
                 </Field>
               )}
             </div>
           )}
 
-          <TransactionLines mode={mode} lines={lines} setLines={setLines} items={items}/>
+          {sale ? (
+            <Guard request={saleInventory}>
+              {() => (
+                <>
+                  {items.filter(i => i.quantity > 0).length === 0 ? (
+                    <p className="inline-note info">На выбранном складе пока нет готовой продукции в наличии для продажи.</p>
+                  ) : (
+                    <TransactionLines mode={mode} lines={lines} setLines={setLines} items={items}/>
+                  )}
+                </>
+              )}
+            </Guard>
+          ) : (
+            <TransactionLines
+              mode={mode}
+              lines={lines}
+              setLines={setLines}
+              items={items}
+              onAddMaterial={receipt ? () => setNewMaterialOpen(true) : undefined}
+            />
+          )}
 
           {sale && (
             <Field label="Способ оплаты">
@@ -1178,17 +1363,25 @@ function TransactionEditor({mode, document, inventory}) {
             </div>
           )}
 
-          {!sale && (
-            <Field label="Комментарий (необязательно)">
-              <textarea rows="3" maxLength="500" value={memo} onChange={e => setMemo(e.target.value)}/>
-            </Field>
-          )}
+          <Field label="Комментарий (необязательно)">
+            <textarea
+              rows={sale ? '2' : '3'}
+              maxLength="500"
+              value={memo}
+              placeholder={sale ? 'Например: скидка, самовывоз или примечание к заказу' : undefined}
+              onChange={e => setMemo(e.target.value)}
+            />
+          </Field>
 
           <ErrorBox error={state.error}/>
           <ActionRow>
             <Button className="push-left" to={back}>Отмена</Button>
             {receipt && <Button type="submit" value="draft" disabled={state.busy}>Сохранить черновик</Button>}
-            <Button type="submit" kind={document && !receipt ? 'secondary' : 'primary'} disabled={state.busy || hasOverdraw}>
+            <Button
+              type="submit"
+              kind={document && !receipt ? 'secondary' : 'primary'}
+              disabled={state.busy || hasOverdraw || (sale && (!saleInventory.data || items.filter(i => i.quantity > 0).length === 0))}
+            >
               {sale ? 'Проверить продажу' : receipt ? 'Принять на склад' : 'Сохранить черновик'}
             </Button>
             {document && !receipt && (
@@ -1198,14 +1391,18 @@ function TransactionEditor({mode, document, inventory}) {
         </form>
       </Card>
 
+      {newMaterialOpen && (
+        <NewMaterialDialog close={() => setNewMaterialOpen(false)} done={handleMaterialCreated}/>
+      )}
+
       {pending && (
         <Confirm
           close={() => setPending('')}
           title={sale ? 'Оформить продажу?' : receipt ? 'Провести поступление?' : 'Отправить перемещение?'}
           text={sale
-            ? 'К оплате ' + money(totalValue) + '. Товары будут списаны со склада ' + ws.user.city + '.'
+            ? 'К оплате ' + money(totalValue) + '. Товары будут списаны со склада ' + (activeSaleWarehouse ? place(activeSaleWarehouse) : ws.user.city) + '.'
             : receipt
-              ? 'Позиции из накладной будут зачислены на склад сырья.'
+              ? 'Позиции из накладной будут зачислены на склад «' + (activeReceiptWarehouse ? place(activeReceiptWarehouse) : 'Склад сырья · Иваново') + '».'
               : 'Товар будет списан в Иваново. Остатки склада назначения увеличатся после подтверждения получения.'}
           action={() => submit(true)}
           submit={sale ? 'Оформить продажу' : receipt ? 'Принять на склад' : 'Отправить'}
@@ -1248,7 +1445,11 @@ function DocumentView({d}) {
   const sale = d.kind === 'sale', transfer = d.kind === 'transfer', receipt = d.kind === 'receipt'
   const showBookValue = transfer && !regional && d.status !== 'draft'
   const title = (sale ? 'Продажа' : transfer ? (regional ? 'Приёмка' : 'Перемещение') : 'Поступление сырья') + ' ' + d.code
-  const back = sale ? (regional ? '/sales' : '/stock/sales') : transfer ? (regional ? '/receiving' : '/stock/transfers') : '/stock/1'
+  const back = sale
+    ? (regional ? '/sales' : '/stock/sales')
+    : transfer
+      ? (regional ? '/receiving' : '/stock/transfers')
+      : '/stock/' + (d.target_id || 1)
   const at = useRemote(regional && transfer && d.status === 'in_transit' ? '/warehouses/' + ws.user.warehouse_id : null)
 
   const details = sale
@@ -1267,7 +1468,7 @@ function DocumentView({d}) {
       : [
           ['Поставщик', d.supplier],
           ['Накладная', d.reference],
-          ['Склад', d.target_name]
+          ['Склад', d.target_name + (d.target_city ? ' · ' + d.target_city : '')]
         ]
 
   return (
@@ -1292,7 +1493,7 @@ function DocumentView({d}) {
           rows={d.lines}
           label={sale ? 'Товары продажи' : 'Товары документа'}
           columns={[
-            {label: receipt ? 'Материал' : 'Изделие', cell: r => r.name},
+            {label: receipt ? 'Материал' : 'Изделие', primary: true, cell: r => r.name},
             ...(!receipt ? [{label: 'Размер', cell: r => nowrap(r.size)}] : []),
             {label: 'Количество', align: 'right', cell: r => qty(r.quantity) + ' ' + r.unit},
             {label: sale ? 'Цена за ед.' : transfer ? 'Цена строки за ед.' : 'Стоимость за ед.', align: 'right', cell: r => money(r.price)},
@@ -1315,7 +1516,7 @@ function DocumentView({d}) {
           </p>
         )}
         {sale && <Details values={details}/>}
-        {d.memo && <p className="inline-note">{d.memo}</p>}
+        {d.memo && <p className="inline-note">{sale ? <><strong>Комментарий:</strong> {d.memo}</> : d.memo}</p>}
         {regional && transfer && d.status === 'in_transit' && (
           <p className="inline-note info">Сверьте количество каждой позиции перед подтверждением приёмки.</p>
         )}
@@ -1334,11 +1535,9 @@ export function TransactionRoute({mode, id}) {
   const ws = useWorkspace()
   const request = useRemote(id ? '/document/' + id : null)
   const inventory = useRemote(
-    mode === 'sale' && !id
-      ? '/warehouses/' + ws.user.warehouse_id
-      : mode === 'transfer' && (!id || request.data?.status === 'draft')
-        ? '/warehouses/5'
-        : null
+    mode === 'transfer' && (!id || request.data?.status === 'draft')
+      ? '/warehouses/5'
+      : null
   )
 
   if (id) {
@@ -1362,8 +1561,12 @@ export function TransactionRoute({mode, id}) {
     )
   }
 
-  if (mode === 'sale' && ws.user.role !== 'regional') {
-    return <ErrorBox error="Оформление продажи доступно только сотруднику регионального склада."/>
+  if (mode === 'sale') {
+    if (ws.user.role !== 'regional' && !roleCanWrite(ws.user)) {
+      return <ErrorBox error="Оформление продажи недоступно для вашей роли."/>
+    }
+    const queryWh = Number(new URLSearchParams(window.location.hash.split('?')[1] || '').get('warehouse')) || undefined
+    return <TransactionEditor mode={mode} initialSaleWarehouse={queryWh}/>
   }
   if ((mode === 'receipt' || mode === 'transfer') && !roleCanWrite(ws.user)) {
     return <ErrorBox error="Создание документа недоступно для вашей роли."/>
@@ -1388,7 +1591,7 @@ export function RawMaterial({id}) {
                 label="Остаток материала"
                 rows={[material]}
                 columns={[
-                  {label: 'Материал', cell: r => r.name},
+                  {label: 'Материал', primary: true, cell: r => r.name},
                   {label: 'Единица', cell: r => r.unit},
                   {label: 'На начало дня', align: 'right', cell: r => qty(r.quantity - r.incoming + r.outgoing) + ' ' + r.unit},
                   {label: 'Поступило', align: 'right', cell: r => qty(r.incoming) + ' ' + r.unit},

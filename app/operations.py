@@ -104,9 +104,9 @@ def set_lines(db, doc_id, lines, item_kind, price_source=False):
             raise RuleViolation("Выберите подходящие позиции без повторов", 422)
         seen.add(item["id"])
         qty = to_units(line.quantity)
-        if item["unit"] != "м" and qty % 1000:
+        if item["unit"] not in ("м", "кг") and qty % 1000:
             raise RuleViolation(f"Для позиции «{item['name']}» укажите целое количество", 422)
-        price = item["price"] if price_source else to_units(line.price, 100)
+        price = (to_units(line.price, 100) if line.price > 0 else item["price"]) if price_source else to_units(line.price, 100)
         if price <= 0:
             raise RuleViolation("Укажите стоимость за единицу товара", 422)
         db.execute("INSERT INTO lines(doc_id,item_id,quantity,price) VALUES(?,?,?,?)", (doc_id, item["id"], qty, price))
@@ -158,13 +158,17 @@ def populate_report(db, doc_id, payload):
             )
 
 
-def save_report(db, payload, actor, doc_id=None, at=None, historical=False):
+def save_report(db, payload, actor, doc_id=None, at=None, historical=False, role=None):
     at = at or now()
     day = str(payload.date)
     if not historical:
         check_period(db, day)
+    source_wh = payload.source_id or WAREHOUSES["raw"]
+    place = required(db, "warehouses", source_wh)
+    if role == "master" and place["kind"] == "regional":
+        raise RuleViolation("Выбранный склад недоступен для мастера смены", 403)
     if doc_id is None:
-        doc_id = new_document(db, "report", day, actor, at, stage=payload.stage, shift=payload.shift, memo=payload.memo)
+        doc_id = new_document(db, "report", day, actor, at, stage=payload.stage, shift=payload.shift, source_id=source_wh, memo=payload.memo)
     else:
         doc = get_document(db, doc_id, "report")
         if doc["status"] != "draft":
@@ -172,7 +176,7 @@ def save_report(db, payload, actor, doc_id=None, at=None, historical=False):
         db.execute("DELETE FROM assignments WHERE line_id IN (SELECT id FROM lines WHERE doc_id=?)", (doc_id,))
         db.execute("DELETE FROM material_snapshots WHERE line_id IN (SELECT id FROM lines WHERE doc_id=?)", (doc_id,))
         db.execute("DELETE FROM lines WHERE doc_id=?", (doc_id,))
-        db.execute("UPDATE documents SET date=?,stage=?,shift=?,memo=?,updated_at=? WHERE id=?", (day,payload.stage,payload.shift,payload.memo,at,doc_id))
+        db.execute("UPDATE documents SET date=?,stage=?,shift=?,source_id=?,memo=?,updated_at=? WHERE id=?", (day,payload.stage,payload.shift,source_wh,payload.memo,at,doc_id))
         event(db, doc_id, actor, at, "updated")
     populate_report(db, doc_id, payload)
     return doc_id
@@ -186,6 +190,7 @@ def post_report(db, doc_id, actor, at=None, historical=False):
     if not historical:
         check_period(db, doc["date"])
     stage = doc["stage"]
+    source_wh = doc["source_id"] or WAREHOUSES["raw"]
     for line in doc_lines(db, doc_id):
         item_id, quantity = line["item_id"], line["quantity"]
         workers = records(db, """
@@ -197,7 +202,7 @@ def post_report(db, doc_id, actor, at=None, historical=False):
             raise RuleViolation("В отчёте есть сотрудник, который больше не работает на выбранном этапе")
         cost = sum(line_cost(a["quantity"], a["rate"]) for a in workers)
         for m in records(db, "SELECT * FROM material_snapshots WHERE line_id=?", (line["id"],)):
-            used = withdraw(db, doc_id, WAREHOUSES["raw"], m["item_id"], m["quantity"], at, "material")
+            used = withdraw(db, doc_id, source_wh, m["item_id"], m["quantity"], at, "material")
             cost += used
             db.execute("UPDATE material_snapshots SET value=? WHERE line_id=? AND item_id=?", (used, line["id"], m["item_id"]))
         if stage == "sew":
@@ -223,7 +228,7 @@ def correct_report(db, doc_id, actor, reason):
     for m in records(db, "SELECT * FROM movements WHERE doc_id=? ORDER BY id DESC", (doc_id,)):
         movement(db, doc_id, m["warehouse_id"], m["item_id"], -m["quantity"], -m["value"], at, "correction")
     set_status(db, doc_id, "corrected", actor, at, reason)
-    replacement = new_document(db, "report", doc["date"], actor, at, stage=doc["stage"], shift=doc["shift"], memo=reason, source_doc=doc_id)
+    replacement = new_document(db, "report", doc["date"], actor, at, stage=doc["stage"], shift=doc["shift"], source_id=doc["source_id"], memo=reason, source_doc=doc_id)
     for line in doc_lines(db, doc_id):
         new_line = db.execute(
             "INSERT INTO lines(doc_id,item_id,quantity,spec_id,prepared) VALUES(?,?,?,?,?)",
@@ -236,6 +241,8 @@ def correct_report(db, doc_id, actor, reason):
 
 def save_receipt(db, payload, actor, at=None, historical=False, post=True, doc_id=None):
     at = at or now()
+    target_wh = payload.target_id or WAREHOUSES["raw"]
+    required(db, "warehouses", target_wh)
     if not historical:
         check_period(db, payload.date)
         existing=record(db,"""
@@ -245,20 +252,20 @@ def save_receipt(db, payload, actor, at=None, historical=False, post=True, doc_i
         if existing:
             raise RuleViolation(f"Накладная уже добавлена в поступлении {existing['code']}")
     if doc_id is None:
-        doc_id = new_document(db, "receipt", str(payload.date), actor, at, target_id=WAREHOUSES["raw"],
+        doc_id = new_document(db, "receipt", str(payload.date), actor, at, target_id=target_wh,
                               memo=payload.memo, supplier=payload.supplier, reference=payload.reference)
     else:
         doc = get_document(db, doc_id, "receipt")
         if doc["status"] != "draft":
             raise RuleViolation("Редактировать можно только черновик поступления")
         db.execute("DELETE FROM lines WHERE doc_id=?", (doc_id,))
-        db.execute("UPDATE documents SET date=?,memo=?,supplier=?,reference=?,updated_at=? WHERE id=?",
-                   (str(payload.date),payload.memo,payload.supplier,payload.reference,at,doc_id))
+        db.execute("UPDATE documents SET date=?,target_id=?,memo=?,supplier=?,reference=?,updated_at=? WHERE id=?",
+                   (str(payload.date),target_wh,payload.memo,payload.supplier,payload.reference,at,doc_id))
         event(db, doc_id, actor, at, "updated")
     set_lines(db, doc_id, payload.lines, "raw")
     if post:
         for line in doc_lines(db, doc_id):
-            movement(db, doc_id, WAREHOUSES["raw"], line["item_id"], line["quantity"],
+            movement(db, doc_id, target_wh, line["item_id"], line["quantity"],
                      line_cost(line["quantity"], line["price"]), at, "receipt")
         set_status(db, doc_id, "posted", actor, at)
     return doc_id
@@ -307,17 +314,20 @@ def receive_transfer(db, doc_id, actor, at=None):
 
 def save_sale(db, payload, actor, warehouse, at=None):
     at = at or now()
-    existing = record(db, "SELECT id FROM documents WHERE kind='sale' AND source_id=? AND author_id=? AND reference=?", (warehouse, actor, payload.request_key))
+    existing = record(db, "SELECT id,payment,memo FROM documents WHERE kind='sale' AND source_id=? AND author_id=? AND reference=?", (warehouse, actor, payload.request_key))
     if existing:
         saved = doc_lines(db, existing["id"])
-        payment = scalar(db, "SELECT payment FROM documents WHERE id=?", (existing["id"],))
-        if payment != payload.payment or [(l["item_id"], l["quantity"]) for l in saved] != [(l.item_id, to_units(l.quantity)) for l in payload.lines]:
+        expected = [
+            (l.item_id, to_units(l.quantity), to_units(l.price, 100) if l.price > 0 else required(db, "items", l.item_id)["price"])
+            for l in payload.lines
+        ]
+        if existing["payment"] != payload.payment or existing["memo"] != payload.memo or [(l["item_id"], l["quantity"], l["price"]) for l in saved] != expected:
             raise RuleViolation("Новая продажа требует нового подтверждения")
         return existing["id"]
     place = required(db, "warehouses", warehouse)
-    if place["kind"] != "regional":
-        raise RuleViolation("Выберите региональный склад", 422)
-    doc_id = new_document(db, "sale", at[:10], actor, at, source_id=warehouse, payment=payload.payment, reference=payload.request_key)
+    if place["kind"] not in ("regional", "finished"):
+        raise RuleViolation("Продажа доступна только со склада готовой продукции или регионального склада", 422)
+    doc_id = new_document(db, "sale", at[:10], actor, at, source_id=warehouse, payment=payload.payment, reference=payload.request_key, memo=payload.memo)
     set_lines(db, doc_id, payload.lines, "product", price_source=True)
     for line in doc_lines(db, doc_id):
         cost = withdraw(db, doc_id, warehouse, line["item_id"], line["quantity"], at, "sale")
@@ -338,12 +348,10 @@ def save_recipe(db, item_id, payload, effective=None):
         material = required(db, "items", norm.item_id)
         key = (norm.item_id, norm.stage)
         q = to_units(norm.quantity)
-        if material["kind"] != "raw" or key in seen or (material["unit"] != "м" and q % 1000):
+        if material["kind"] != "raw" or key in seen or (material["unit"] not in ("м", "кг") and q % 1000):
             raise RuleViolation("Нормы должны содержать уникальные материалы по этапам и подходящие единицы", 422)
         seen.add(key)
         db.execute("INSERT INTO norms VALUES(?,?,?,?)", (sid,norm.item_id,norm.stage,q))
-    if not set(STAGES).issubset({stage for _,stage in seen}):
-        raise RuleViolation("Добавьте материалы для каждого этапа", 422)
     for stage in STAGES:
         db.execute("INSERT INTO rates VALUES(?,?,?)", (sid,stage,to_units(getattr(payload,stage),100)))
     return sid

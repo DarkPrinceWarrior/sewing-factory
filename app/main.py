@@ -202,7 +202,7 @@ def document(doc_id: int, db: DB, user: User):
 def create_report(data: model.Report, db: DB, user: User, post:bool=False):
     allow(user,"admin","accountant","master")
     with transaction(db):
-        doc=ops.save_report(db,data,user["id"])
+        doc=ops.save_report(db,data,user["id"],role=user["role"])
         if post:
             ops.post_report(db,doc,user["id"])
     return read.detail(db,user,doc)
@@ -212,7 +212,7 @@ def create_report(data: model.Report, db: DB, user: User, post:bool=False):
 def update_report(doc_id:int,data:model.Report,db:DB,user:User,post:bool=False):
     allow(user,"admin","accountant","master")
     with transaction(db):
-        ops.save_report(db,data,user["id"],doc_id)
+        ops.save_report(db,data,user["id"],doc_id,role=user["role"])
         if post:
             ops.post_report(db,doc_id,user["id"])
     return read.detail(db,user,doc_id)
@@ -224,7 +224,7 @@ def preview_report(data: model.Report, db: DB, user: User):
     with transaction(db):
         db.execute("SAVEPOINT preview")
         try:
-            doc=ops.save_report(db,data,user["id"])
+            doc=ops.save_report(db,data,user["id"],role=user["role"])
             return read.detail(db,user,doc)
         finally:
             db.execute("ROLLBACK TO preview")
@@ -382,13 +382,39 @@ def receive_transfer(doc_id:int,db:DB,user:User):
     return read.detail(db,user,doc_id)
 
 
+@app.post("/api/materials")
+def add_material(data:model.RawMaterial,db:DB,user:User):
+    allow(user,"admin","accountant")
+    with transaction(db):
+        sku=data.sku.strip()
+        if not sku:
+            seq=db.execute("SELECT COUNT(*)+1 FROM items WHERE kind='raw'").fetchone()[0]
+            while True:
+                candidate=f"RAW-{seq:03}"
+                if not record(db,"SELECT 1 FROM items WHERE sku=?",(candidate,)):
+                    sku=candidate
+                    break
+                seq+=1
+        elif record(db,"SELECT 1 FROM items WHERE sku=?",(sku,)):
+            raise HTTPException(409,"Материал с таким артикулом уже существует")
+        item_id=db.execute(
+            "INSERT INTO items(kind,sku,name,size,unit,category,price) VALUES('raw',?,?,'',?,?,?)",
+            (sku,data.name.strip(),data.unit,data.category.strip(),to_units(data.price,100)),
+        ).lastrowid
+    return ops.required(db,"items",item_id)
+
+
 @app.post("/api/sales")
 def add_sale(data:model.Sale,db:DB,user:User):
-    allow(user,"regional")
-    if data.warehouse_id is not None and data.warehouse_id!=user["warehouse_id"]:
-        raise HTTPException(403,"Продажа доступна только на вашем складе")
+    allow(user,"regional","admin","accountant")
+    if user["role"]=="regional":
+        if data.warehouse_id is not None and data.warehouse_id!=user["warehouse_id"]:
+            raise HTTPException(403,"Продажа доступна только на вашем складе")
+        warehouse_id=user["warehouse_id"]
+    else:
+        warehouse_id=data.warehouse_id or ops.WAREHOUSES["finished"]
     with transaction(db):
-        doc=ops.save_sale(db,data,user["id"],user["warehouse_id"])
+        doc=ops.save_sale(db,data,user["id"],warehouse_id)
     return read.detail(db,user,doc)
 
 

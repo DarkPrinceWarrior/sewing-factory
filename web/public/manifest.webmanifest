@@ -1,0 +1,22 @@
+{
+  "id": "/",
+  "name": "Швейная фабрика",
+  "short_name": "Фабрика",
+  "description": "Учёт производства, складов, перемещений, продаж и сдельной зарплаты",
+  "lang": "ru",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#f7f7f7",
+  "theme_color": "#f7f7f7",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
