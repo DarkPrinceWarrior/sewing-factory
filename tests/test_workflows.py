@@ -557,3 +557,88 @@ def test_ivanovo_sale_editable_price_memo_and_scope(client):
     assert client.get(f"/api/document/{doc['id']}").status_code == 404
     assert client.get("/api/documents/sale", params={"warehouse": 5}).json()["total"] == 0
     assert client.get("/api/sales-summary", params={"warehouse": 5}).json()["documents"] == 0
+
+
+def test_gzip_and_pwa_headers(client, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.middleware.gzip import GZipMiddleware
+    from fastapi.staticfiles import StaticFiles
+    from app.db import ROOT
+    from app.main import PWAHeadersMiddleware
+
+    # 1. GZip + no-store on API responses
+    login(client, "admin")
+    ws_res = client.get("/api/workspace", headers={"Accept-Encoding": "gzip"})
+    assert ws_res.status_code == 200
+    assert ws_res.headers.get("content-encoding") == "gzip"
+    assert ws_res.headers.get("cache-control") == "no-store"
+
+    # 2. Live PWA routes (/sw.js, /manifest.webmanifest, /icons/*.png) & dist/assets/*
+    sw = client.get("/sw.js")
+    assert sw.status_code == 200
+    assert sw.headers.get("content-type") == "application/javascript; charset=utf-8"
+    assert sw.headers.get("cache-control") == "no-cache"
+    assert sw.headers.get("service-worker-allowed") == "/"
+
+    mf = client.get("/manifest.webmanifest")
+    assert mf.status_code == 200
+    assert mf.headers.get("content-type") == "application/manifest+json; charset=utf-8"
+    assert mf.headers.get("cache-control") == "no-cache"
+    assert mf.json().get("display") == "standalone"
+
+    for icon_name in ("icon-192.png", "icon-512.png", "icon-512-maskable.png", "apple-touch-icon.png"):
+        icon_res = client.get(f"/icons/{icon_name}")
+        assert icon_res.status_code == 200, icon_name
+        assert icon_res.headers.get("content-type") == "image/png"
+        assert icon_res.content.startswith(b"\x89PNG\r\n\x1a\n")
+        assert "max-age=86400" in icon_res.headers.get("cache-control", "")
+
+    assert client.get("/icons/..%2Fmanifest.webmanifest").status_code == 404
+    assert client.get("/icons/nonexistent.png").status_code == 404
+
+    dist_dir = ROOT / "dist"
+    if dist_dir.exists():
+        index_res = client.get("/")
+        assert index_res.status_code == 200
+        assert index_res.headers.get("cache-control") == "no-cache"
+
+        assets = list((dist_dir / "assets").glob("*")) if (dist_dir / "assets").exists() else []
+        if assets:
+            asset = client.get(f"/assets/{assets[0].name}", headers={"Accept-Encoding": "gzip"})
+            assert asset.status_code == 200
+            assert "immutable" in asset.headers.get("cache-control", "")
+
+    # 3. Direct middleware test for /sw.js, /manifest.webmanifest, /assets/*, /icons/*.png
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "icons").mkdir()
+    (tmp_path / "index.html").write_text("<!doctype html><html><body>ok</body></html>")
+    (tmp_path / "sw.js").write_text("self.addEventListener('fetch', () => {});")
+    (tmp_path / "manifest.webmanifest").write_text('{"name":"Test","display":"standalone"}')
+    (tmp_path / "assets" / "app-abc123.js").write_text("console.log('ok');" * 80)
+    (tmp_path / "icons" / "icon-192.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+
+    mini = FastAPI()
+    mini.add_middleware(PWAHeadersMiddleware)
+    mini.add_middleware(GZipMiddleware, minimum_size=500)
+    mini.mount("/", StaticFiles(directory=tmp_path, html=True))
+    with TestClient(mini) as mc:
+        r_sw = mc.get("/sw.js")
+        assert r_sw.status_code == 200
+        assert r_sw.headers["content-type"] == "application/javascript; charset=utf-8"
+        assert r_sw.headers["cache-control"] == "no-cache"
+        assert r_sw.headers["service-worker-allowed"] == "/"
+
+        r_mf = mc.get("/manifest.webmanifest")
+        assert r_mf.status_code == 200
+        assert r_mf.headers["content-type"] == "application/manifest+json; charset=utf-8"
+        assert r_mf.headers["cache-control"] == "no-cache"
+
+        r_js = mc.get("/assets/app-abc123.js", headers={"Accept-Encoding": "gzip"})
+        assert r_js.status_code == 200
+        assert r_js.headers.get("content-encoding") == "gzip"
+        assert "immutable" in r_js.headers["cache-control"]
+
+        r_png = mc.get("/icons/icon-192.png")
+        assert r_png.status_code == 200
+        assert r_png.headers["content-type"] == "image/png"
+        assert "max-age=86400" in r_png.headers["cache-control"]

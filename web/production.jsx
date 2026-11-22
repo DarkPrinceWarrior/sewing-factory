@@ -1,10 +1,10 @@
 import React, { useId, useState } from 'react'
 import {
   ActionRow, Button, Card, Confirm, DateControl, DateRange, Dialog, Download, EmptyState,
-  ErrorBox, Field, FormActions, Guard, Page, Pager, RegistryTools, Select, Status, Table, Tabs,
-  api, dayText, go, href, itemText, money, monthText, number, qty, roleCanWrite, routeWith,
-  shifts, stages, statuses, timeText, useAction, useFilters, useRemote, useSearchOptions,
-  useToast, useWorkspace
+  ErrorBox, Field, FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Select, Status,
+  Stepper, Table, Tabs, api, dayText, go, href, itemText, money, monthText, number, qty,
+  roleCanWrite, routeWith, shifts, stages, statuses, timeText, useAction, useFilters, useRemote,
+  useSearchOptions, useToast, useWorkspace
 } from './ui'
 import { SearchPicker } from './pickers'
 
@@ -38,6 +38,11 @@ const operations = {
 }
 const sum = (rows, key) => rows.reduce((total, row) => total + (row[key] || 0), 0)
 const warehouseLabel = (name, city) => [name, city].filter(Boolean).join(' · ')
+function shiftDay(iso, delta) {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return ''
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10)
+}
 
 function shiftReportColumns(overview = false) {
   const columns = [
@@ -218,7 +223,15 @@ export function Overview() {
     <Page
       title="Обзор производства"
       subtitle={
-        <>
+        <span className="day-stepper" role="group" aria-label="Выбор даты обзора">
+          <button
+            type="button"
+            className="day-stepper-btn"
+            aria-label="Предыдущий день"
+            onClick={() => overview.change('day', shiftDay(day, -1) || today)}
+          >
+            ‹
+          </button>
           <DateControl
             inline
             required
@@ -227,12 +240,23 @@ export function Overview() {
             value={day}
             onChange={e => overview.change('day', e.target.value || today)}
           />
-          {' · фактические результаты смены'}
-        </>
+          <button
+            type="button"
+            className="day-stepper-btn"
+            aria-label="Следующий день"
+            disabled={day >= today}
+            onClick={() => {
+              const next = shiftDay(day, 1)
+              if (next && next <= today) overview.change('day', next)
+            }}
+          >
+            ›
+          </button>
+        </span>
       }
       actions={<Button kind="primary" to={newReportTarget}>Новый отчёт за смену</Button>}
     >
-      <Guard request={request}>
+      <Guard request={request} skeleton="overview">
         {data => {
           const dayReports = data.day_reports ?? data.reports ?? []
           const dayDrafts = data.day_drafts ?? dayReports.filter(r => r.status === 'draft')
@@ -277,6 +301,7 @@ export function Overview() {
                 <Table
                   columns={shiftReportColumns(true)}
                   rows={dayReports}
+                  rowHref={r => '/reports/' + r.id}
                   label="Отчёты за смену"
                   empty="За выбранную дату отчётов нет"
                 />
@@ -379,6 +404,7 @@ export function ReportList() {
               <Table
                 columns={shiftReportColumns()}
                 rows={d.rows}
+                rowHref={r => '/reports/' + r.id}
                 label="Реестр отчётов"
                 hasPager={Boolean(d.total)}
                 empty={
@@ -522,15 +548,13 @@ function EditWorkLine({ original, stage, used, items, close, save, remove }) {
             />
           </Field>
           <Field label="Количество, компл.">
-            <input
+            <Stepper
               required
-              min="1"
-              step="1"
-              max="100000"
-              type="number"
-              inputMode="numeric"
+              min={1}
+              step={1}
+              max={100000}
               value={data.quantity}
-              onChange={e => change('quantity', e.target.value === '' ? '' : Number(e.target.value))}
+              onChange={v => change('quantity', v)}
             />
           </Field>
           {stage === 'pack' && (
@@ -538,15 +562,13 @@ function EditWorkLine({ original, stage, used, items, close, save, remove }) {
               label="Передано с пошива, компл."
               help="Сколько комплектов поступило на участок упаковки в эту смену."
             >
-              <input
+              <Stepper
                 required
-                min="0"
-                step="1"
-                max="100000"
-                type="number"
-                inputMode="numeric"
+                min={0}
+                step={1}
+                max={100000}
                 value={data.prepared}
-                onChange={e => change('prepared', e.target.value === '' ? '' : Number(e.target.value))}
+                onChange={v => change('prepared', v)}
               />
             </Field>
           )}
@@ -678,16 +700,14 @@ function EditAssignment({ original, initialLine = 0, lines, workers, close, save
               </span>
             }
           >
-            <input
-              type="number"
-              inputMode="numeric"
+            <Stepper
               required
-              min="1"
-              step="1"
+              min={1}
+              step={1}
               max={Math.max(1, remaining)}
               disabled={!remaining}
               value={data.quantity}
-              onChange={e => change('quantity', e.target.value === '' ? '' : Number(e.target.value))}
+              onChange={v => change('quantity', v)}
             />
           </Field>
         </div>
@@ -750,6 +770,7 @@ function MaterialRows({ document, sourceId = 1, sourceLabel = 'Склад сыр
         label="Списание материалов"
         rows={rows}
         rowKey={r => r.key}
+        rowHref={r => materialHref(r.item_id)}
         empty="По спецификации для выбранного этапа списание материалов не требуется"
         columns={columns}
       />
@@ -822,7 +843,7 @@ export function DocumentHistory({ document, hideCost, defaultOpen = false }) {
                 className: 'nowrap',
                 cell: r => dayText(r.happened_at) + ' · ' + timeText(r.happened_at)
               },
-              { label: 'Комментарий', cell: r => r.memo || '—' }
+              { label: 'Комментарий', mobileFull: true, cell: r => r.memo || '—' }
             ]}
           />
           {document.movements?.length > 0 && (
@@ -1008,39 +1029,36 @@ function ReportEditor({ document }) {
       }
     >
       {document && (
-        <Card className="kpi-grid cols-4">
-          <div className="kpi-item">
-            <span className="kpi-label">Статус</span>
-            <div className="kpi-value">
-              <Status value={document.status} />
-            </div>
-            <span className="kpi-meta">{shifts[document.shift] || document.shift} смена</span>
-          </div>
-          <div className="kpi-item">
-            <span className="kpi-label">Выработка</span>
-            <strong className="kpi-value">{qty(document.quantity)} компл.</strong>
-            <span className="kpi-meta">
-              {stages[document.stage]} ·{' '}
-              <a href={href('/stock/' + activeSourceId)}>{activeSourceLabel}</a>
-            </span>
-          </div>
-          <div className="kpi-item">
-            <span className="kpi-label">Начислено</span>
-            <strong className="kpi-value">
-              {document.status === 'draft' ? '—' : money(document.wages)}
-            </strong>
-            <span className="kpi-meta">
-              {document.status === 'draft' ? 'Фиксируется при проведении' : 'Сдельная оплата'}
-            </span>
-          </div>
-          <div className="kpi-item">
-            <span className="kpi-label">Автор</span>
-            <strong className="kpi-value" style={{ fontSize: 'clamp(17px, 2vw, 22px)', lineHeight: '30px' }}>
-              {document.author}
-            </strong>
-            <span className="kpi-meta">{dayText(document.date)}</span>
-          </div>
-        </Card>
+        <MetricStrip
+          items={[
+            {
+              key: 'status',
+              label: 'Статус',
+              value: <Status value={document.status} />,
+              meta: (shifts[document.shift] || document.shift) + ' смена'
+            },
+            {
+              key: 'output',
+              label: 'Выработка',
+              value: qty(document.quantity) + ' компл.',
+              meta: stages[document.stage] + ' · ' + activeSourceLabel,
+              to: '/stock/' + activeSourceId,
+              ariaLabel: 'Открыть склад списания: ' + activeSourceLabel
+            },
+            {
+              key: 'wages',
+              label: 'Начислено',
+              value: document.status === 'draft' ? '—' : money(document.wages),
+              meta: document.status === 'draft' ? 'Фиксируется при проведении' : 'Сдельная оплата'
+            },
+            {
+              key: 'author',
+              label: 'Автор',
+              value: document.author,
+              meta: dayText(document.date)
+            }
+          ]}
+        />
       )}
 
       <DocumentRelationBanner document={document} />
@@ -1267,6 +1285,7 @@ function ReportEditor({ document }) {
               label="Технологическая карта"
               rows={assigned}
               rowKey={r => r.line + '-' + r.staff_id}
+              rowHref={!editable ? r => '/people/' + r.staff_id : undefined}
               empty={
                 products.length
                   ? 'Исполнители ещё не назначены'
@@ -1413,6 +1432,37 @@ function ReportEditor({ document }) {
 
       {document && <DocumentHistory document={{ ...document, movements: [] }} defaultOpen={document.status !== 'draft'} />}
 
+      {editable && (
+        <div className="mobile-sticky-bar" role="region" aria-label="Действия отчёта">
+          <div className="mobile-sticky-summary">
+            <span>Выработка</span>
+            <strong>{number(totalOutput)} компл.</strong>
+          </div>
+          <div className="mobile-sticky-actions">
+            <Button
+              disabled={!report.lines.length || action.busy || dateBelowOpenMonth}
+              onClick={() => save(false)}
+            >
+              Черновик
+            </Button>
+            <Button
+              kind="primary"
+              disabled={!report.lines.length || action.busy || dateBelowOpenMonth}
+              onClick={() => {
+                if (canPost) {
+                  setConfirm('post')
+                } else {
+                  selectTab('wages')
+                  toast.info('Распределите весь выпуск по исполнителям перед проведением.')
+                }
+              }}
+            >
+              Провести
+            </Button>
+          </div>
+        </div>
+      )}
+
       {edit?.kind === 'line' && (
         <EditWorkLine
           original={report.lines[edit.index]}
@@ -1514,7 +1564,7 @@ export function ReportDetail({ id }) {
   const request = useRemote(id ? '/document/' + id : null)
   if (!id) return <ReportEditor key="new" />
   return (
-    <Guard request={request}>
+    <Guard request={request} skeleton="cards">
       {r =>
         r.kind === 'report' ? (
           <ReportEditor key={r.id + '-' + r.status + '-' + r.updated_at} document={r} />
@@ -1530,7 +1580,7 @@ export function ReportMovements({ id }) {
   const ws = useWorkspace()
   const request = useRemote('/document/' + id)
   return (
-    <Guard request={request}>
+    <Guard request={request} skeleton="cards">
       {d => {
         if (d.kind !== 'report' || d.status === 'draft') {
           return <ErrorBox error="По этому документу ещё нет движений." />
@@ -1626,6 +1676,7 @@ export function ReportMovements({ id }) {
               <Table
                 label="Сдельная зарплата по отчёту"
                 rows={assignmentRows}
+                rowHref={r => '/people/' + r.staff_id}
                 empty="Начислений по отчёту нет"
                 columns={[
                   {

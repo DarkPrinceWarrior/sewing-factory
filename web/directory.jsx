@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useMemo, useState } from 'react'
 import {
   ActionRow, Button, Card, DateControl, DateRange, Details, Dialog, Download, ErrorBox,
-  Field, FormActions, Guard, Page, Pager, RegistryTools, Select, Status, Table, Tabs,
+  Field, FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Select, Status, Table, Tabs,
   api, dayText, go, href, itemText, matchesSearch, money, monthText, number, qty,
   roleCanWrite, routeWith, stages, useAction, useFilters, useRemote, useToast, useWorkspace
 } from './ui'
@@ -64,7 +64,7 @@ function formatSignedMoney(delta) {
   return `${sign}${money(Math.abs(delta))}`
 }
 
-function LocalPager({ rows, columns, page, setPage, label, empty, footer, rowKey }) {
+function LocalPager({ rows, columns, page, setPage, label, empty, footer, rowKey, rowHref }) {
   const [size, setSize] = useState(15)
   const maxPage = Math.max(1, Math.ceil(rows.length / size))
   const safePage = Math.min(page, maxPage)
@@ -77,6 +77,7 @@ function LocalPager({ rows, columns, page, setPage, label, empty, footer, rowKey
         empty={empty}
         footer={footer}
         rowKey={rowKey}
+        rowHref={rowHref}
         hasPager={rows.length > 0}
       />
       <Pager
@@ -141,6 +142,7 @@ export function Catalog() {
           label="Изделия и нормы"
           empty="Изделия по этому запросу не найдены"
           rows={rows}
+          rowHref={r => '/catalog/' + r.id}
           columns={[
             {
               label: 'Изделие',
@@ -418,7 +420,7 @@ function SpecEditor({ detail, close, done }) {
             + {stageLabel}
           </Button>
         ))}
-        <Button kind="ghost" onClick={() => setNewMaterialStage('cut')}>
+        <Button kind="secondary" onClick={() => setNewMaterialStage('cut')}>
           + Новый материал
         </Button>
       </div>
@@ -445,6 +447,9 @@ function SpecEditor({ detail, close, done }) {
     </form>
   )
 
+  const parsedPrice = Number(details.price)
+  const pricePreview = Number.isFinite(parsedPrice) && parsedPrice > 0 ? money(Math.round(parsedPrice * 100)) : ''
+
   return (
     <>
       {detail ? (
@@ -457,7 +462,20 @@ function SpecEditor({ detail, close, done }) {
           {form}
         </Dialog>
       ) : (
-        form
+        <>
+          {form}
+          <div className="mobile-sticky-bar">
+            <div className="mobile-sticky-summary">
+              <span>Норм сырья: {number(norms.length)}</span>
+              <strong>{pricePreview || 'Новое изделие'}</strong>
+            </div>
+            <div className="mobile-sticky-actions">
+              <Button type="submit" form={formId} kind="primary" disabled={state.busy}>
+                {state.busy ? 'Сохранение…' : 'Создать изделие'}
+              </Button>
+            </div>
+          </div>
+        </>
       )}
       {newMaterialStage !== null && (
         <NewMaterialDialog
@@ -577,25 +595,17 @@ function ProductView({ detail, selected, refresh }) {
       }
       actions={roleCanWrite(user) && <Button kind="primary" onClick={() => setOpen(true)}>Новая версия</Button>}
     >
-      <Card className="kpi-grid cols-3">
-        <div className="kpi-item">
-          <span className="kpi-label">Цена продажи</span>
-          <strong className="kpi-value">{money(item.price)}</strong>
-          <span className="kpi-meta">{item.category} · {item.size}</span>
-        </div>
-        <div className="kpi-item">
-          <span className="kpi-label">Спецификация</span>
-          <strong className="kpi-value">{v ? 'Версия ' + v.version : '—'}</strong>
-          <span className="kpi-meta">
-            {v ? (isLatest ? 'Актуальная · ' : 'Архивная · ') + 'с ' + dayText(v.effective) : 'Не задана'}
-          </span>
-        </div>
-        <div className="kpi-item">
-          <span className="kpi-label">Сдельные начисления</span>
-          <strong className="kpi-value">{v ? money(totalRates) : '—'}</strong>
-          <span className="kpi-meta">За полный цикл (3 этапа)</span>
-        </div>
-      </Card>
+      <MetricStrip
+        items={[
+          { label: 'Цена продажи', value: money(item.price), meta: [item.category, item.size].filter(Boolean).join(' · ') },
+          {
+            label: 'Спецификация',
+            value: v ? 'Версия ' + v.version : '—',
+            meta: v ? (isLatest ? 'Актуальная · ' : 'Архивная · ') + 'с ' + dayText(v.effective) : 'Не задана'
+          },
+          { label: 'Сдельные начисления', value: v ? money(totalRates) : '—', meta: 'За полный цикл (3 этапа)' }
+        ]}
+      />
 
       <Card>
         <div className="toolbar spec-toolbar">
@@ -669,7 +679,7 @@ function ProductView({ detail, selected, refresh }) {
         <Tabs
           items={[
             ['materials', 'Материалы'],
-            ['rates', 'Технологическая карта и расценки']
+            ['rates', 'Техкарта и расценки']
           ]}
           value={tab}
           onChange={setTab}
@@ -683,6 +693,7 @@ function ProductView({ detail, selected, refresh }) {
               rows={v.norms}
               empty="Материалы не указаны — списание сырья для этой версии не выполняется"
               rowKey={r => r.stage + '-' + r.item_id}
+              rowHref={r => '/stock/1/items/' + r.item_id}
               columns={materialColumns}
             />
             {compareTarget && removedNorms.length > 0 && (
@@ -839,6 +850,7 @@ export function People() {
           empty="Сотрудники по этому запросу не найдены"
           page={page}
           setPage={setPage}
+          rowHref={r => '/people/' + r.id}
           columns={[
             { label: 'Сотрудник', primary: true, cell: r => <a href={href('/people/' + r.id)}>{r.name}</a> },
             { label: 'Должность', cell: r => r.position },
@@ -947,25 +959,26 @@ export function StaffDetail({ id }) {
             actions={canWrite && <Button onClick={() => setOpen(true)}>Редактировать</Button>}
           >
             {works && (
-              <Card className="kpi-grid cols-3">
-                <div className="kpi-item">
-                  <span className="kpi-label">Начислено за период</span>
-                  <strong className="kpi-value">{money(amount)}</strong>
-                  <span className="kpi-meta">{dayText(filters.start)} — {dayText(filters.end)}</span>
-                </div>
-                <div className="kpi-item">
-                  <span className="kpi-label">Выработка за период</span>
-                  <strong className="kpi-value">{qty(quantity)} компл.</strong>
-                  <span className="kpi-meta">Строк выработки: {number(d.rows.length)}</span>
-                </div>
-                <div className="kpi-item">
-                  <span className="kpi-label">Последний отчёт в периоде</span>
-                  <strong className="kpi-value">
-                    {d.rows.length ? <a href={href('/reports/' + d.rows[0].id)}>{d.rows[0].code}</a> : '—'}
-                  </strong>
-                  <span className="kpi-meta">{d.rows.length ? dayText(d.rows[0].date) : 'Нет проведённых отчётов'}</span>
-                </div>
-              </Card>
+              <MetricStrip
+                items={[
+                  {
+                    label: 'Начислено за период',
+                    value: money(amount),
+                    meta: dayText(filters.start) + ' — ' + dayText(filters.end)
+                  },
+                  {
+                    label: 'Выработка за период',
+                    value: qty(quantity) + ' компл.',
+                    meta: 'Строк выработки: ' + number(d.rows.length)
+                  },
+                  {
+                    label: 'Последний отчёт',
+                    value: d.rows.length ? d.rows[0].code : '—',
+                    meta: d.rows.length ? dayText(d.rows[0].date) : 'Нет проведённых отчётов',
+                    to: d.rows.length ? '/reports/' + d.rows[0].id : undefined
+                  }
+                ]}
+              />
             )}
 
             <Card>
@@ -1029,6 +1042,7 @@ export function StaffDetail({ id }) {
                     empty="За выбранный период начислений нет"
                     page={page}
                     setPage={setPage}
+                    rowHref={r => '/reports/' + r.doc_id}
                     columns={[
                       {
                         label: 'Дата / документ',
@@ -1115,23 +1129,21 @@ export function Payroll() {
 
           return (
             <>
-              <Card className="kpi-grid cols-3">
-                <div className="kpi-item">
-                  <span className="kpi-label">Начислено по выборке</span>
-                  <strong className="kpi-value">{money(totalAmount)}</strong>
-                  <span className="kpi-meta">Исполнителей: {number(rows.length)}</span>
-                </div>
-                <div className="kpi-item">
-                  <span className="kpi-label">Выработано комплектов</span>
-                  <strong className="kpi-value">{qty(totalQty)} компл.</strong>
-                  <span className="kpi-meta">{dayText(filters.start)} — {dayText(filters.end)}</span>
-                </div>
-                <div className="kpi-item">
-                  <span className="kpi-label">Среднее на сотрудника</span>
-                  <strong className="kpi-value">{rows.length ? money(avgAmount) : '—'}</strong>
-                  <span className="kpi-meta">{filters.stage ? 'Этап: ' + stages[filters.stage] : 'Все этапы'}</span>
-                </div>
-              </Card>
+              <MetricStrip
+                items={[
+                  { label: 'Начислено по выборке', value: money(totalAmount), meta: 'Исполнителей: ' + number(rows.length) },
+                  {
+                    label: 'Выработано комплектов',
+                    value: qty(totalQty) + ' компл.',
+                    meta: dayText(filters.start) + ' — ' + dayText(filters.end)
+                  },
+                  {
+                    label: 'Среднее на сотрудника',
+                    value: rows.length ? money(avgAmount) : '—',
+                    meta: filters.stage ? 'Этап: ' + stages[filters.stage] : 'Все этапы'
+                  }
+                ]}
+              />
 
               {rows.length > 0 && !filters.stage && (
                 <Card title="Распределение начислений по этапам">
@@ -1187,6 +1199,7 @@ export function Payroll() {
                   empty="Начисления по этому запросу не найдены"
                   page={page}
                   setPage={setPage}
+                  rowHref={r => '/people/' + r.id}
                   columns={payrollColumns}
                   footer={
                     rows.length > 0 ? (
@@ -1311,23 +1324,25 @@ export function Month() {
 
             return tab === 'stock' ? (
               <>
-                <div className="card kpi-grid cols-3">
-                  <div className="kpi-item">
-                    <span className="kpi-label">Выпуск готовой продукции</span>
-                    <strong className="kpi-value">{qty(d.completed)} компл.</strong>
-                    <span className="kpi-meta">Упаковано за {monthText(month).toLowerCase()}</span>
-                  </div>
-                  <div className="kpi-item">
-                    <span className="kpi-label">НЗП на конец месяца</span>
-                    <strong className="kpi-value">{qty(wipClosing)} компл.</strong>
-                    <span className="kpi-meta">Крой, пошив и упаковка</span>
-                  </div>
-                  <div className="kpi-item">
-                    <span className="kpi-label">Готовая продукция на конец</span>
-                    <strong className="kpi-value">{qty(finishedClosing)} компл.</strong>
-                    <span className="kpi-meta">Остаток на складе ГП (Иваново)</span>
-                  </div>
-                </div>
+                <MetricStrip
+                  items={[
+                    {
+                      label: 'Выпуск готовой продукции',
+                      value: qty(d.completed) + ' компл.',
+                      meta: 'Упаковано за ' + monthText(month).toLowerCase()
+                    },
+                    {
+                      label: 'НЗП на конец месяца',
+                      value: qty(wipClosing) + ' компл.',
+                      meta: 'Крой, пошив и упаковка'
+                    },
+                    {
+                      label: 'Готовая продукция на конец',
+                      value: qty(finishedClosing) + ' компл.',
+                      meta: 'Остаток на складе ГП (Иваново)'
+                    }
+                  ]}
+                />
 
                 <div className="cost-breakdown">
                   <div className="chart-title">
@@ -1359,6 +1374,7 @@ export function Month() {
                 <Table
                   rows={d.flows}
                   label="Выпуск и остатки"
+                  rowHref={r => '/stock/' + r.id + '?tab=history&start=' + monthStart + '&end=' + monthEnd}
                   columns={[
                     {
                       label: 'Склад',
@@ -1399,23 +1415,25 @@ export function Month() {
               </>
             ) : (
               <>
-                <div className="card kpi-grid cols-3">
-                  <div className="kpi-item">
-                    <span className="kpi-label">Себестоимость выпуска</span>
-                    <strong className="kpi-value">{money(d.total)}</strong>
-                    <span className="kpi-meta">НЗП нач. + затраты − НЗП кон.</span>
-                  </div>
-                  <div className="kpi-item">
-                    <span className="kpi-label">Выпущено комплектов</span>
-                    <strong className="kpi-value">{qty(d.completed)} компл.</strong>
-                    <span className="kpi-meta">Готовая продукция за месяц</span>
-                  </div>
-                  <div className="kpi-item">
-                    <span className="kpi-label">Средняя себестоимость</span>
-                    <strong className="kpi-value">{avgUnitCost != null ? money(avgUnitCost) : '—'}</strong>
-                    <span className="kpi-meta">На 1 выпущенный комплект</span>
-                  </div>
-                </div>
+                <MetricStrip
+                  items={[
+                    {
+                      label: 'Себестоимость выпуска',
+                      value: money(d.total),
+                      meta: 'НЗП нач. + затраты − НЗП кон.'
+                    },
+                    {
+                      label: 'Выпущено комплектов',
+                      value: qty(d.completed) + ' компл.',
+                      meta: 'Готовая продукция за месяц'
+                    },
+                    {
+                      label: 'Средняя себестоимость',
+                      value: avgUnitCost != null ? money(avgUnitCost) : '—',
+                      meta: 'На 1 выпущенный комплект'
+                    }
+                  ]}
+                />
 
                 <div className="cost-breakdown">
                   <div className="chart-title">
@@ -1523,7 +1541,7 @@ export function Month() {
 
 /* --- Настройки --- */
 export function Settings() {
-  const { user, settings, logout } = useWorkspace()
+  const { user, settings, logout, openInstallGuide, installPwa, isStandalone, canInstallPwa } = useWorkspace()
   const toast = useToast()
   const [data, setData] = useState({ old: '', new: '', repeat: '' })
   const [saved, setSaved] = useState(false)
@@ -1599,6 +1617,33 @@ export function Settings() {
               </ActionRow>
             </Card>
           )}
+
+          <Card title="Приложение на телефоне">
+            {isStandalone ? (
+              <div className="pwa-install-card">
+                <p className="muted">Приложение установлено и работает в полноэкранном режиме.</p>
+                <Status value="posted" label="Установлено" />
+              </div>
+            ) : (
+              <div className="pwa-install-card">
+                <p className="muted">
+                  Добавьте «Швейную фабрику» на экран «Домой» для быстрого запуска, полноэкранного режима и кэширования интерфейса.
+                </p>
+                <ActionRow>
+                  {canInstallPwa && installPwa && (
+                    <Button kind="primary" onClick={installPwa}>
+                      Установить приложение
+                    </Button>
+                  )}
+                  {openInstallGuide && (
+                    <Button kind={canInstallPwa ? 'secondary' : 'primary'} onClick={openInstallGuide}>
+                      Установить на экран «Домой»
+                    </Button>
+                  )}
+                </ActionRow>
+              </div>
+            )}
+          </Card>
         </div>
 
         <Card title="Смена пароля" subtitle="После смены пароля все другие активные сеансы будут завершены">

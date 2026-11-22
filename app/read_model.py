@@ -98,7 +98,23 @@ def list_documents(db, user, kind, start="", end="", stage="", status="", wareho
 def detail(db, user, doc_id):
     source = get_document(db,doc_id)
     guard_document(user,source)
-    d = record(db, BASE_DOC+" WHERE d.id=?", (doc_id,))
+    d = record(db, """
+        SELECT d.id,d.kind,d.code,d.status,d.date,d.created_at,d.updated_at,d.stage,d.shift,
+               COALESCE(d.source_id, CASE WHEN d.kind='report' THEN 1 END) source_id,d.target_id,
+               u.name author, d.supplier,d.reference,d.payment, sw.city source_city, sw.name source_name, tw.city target_city, tw.name target_name,
+               d.source_doc, src.code source_code,
+               (SELECT MAX(r.id) FROM documents r WHERE r.source_doc=d.id) replacement_id,
+               (SELECT MAX(r.code) FROM documents r WHERE r.source_doc=d.id) replacement_code,
+               COALESCE((SELECT SUM(quantity) FROM lines WHERE doc_id=d.id),0) quantity,
+               COALESCE((SELECT SUM((quantity*price+500)/1000) FROM lines WHERE doc_id=d.id),0) total,
+               COALESCE((SELECT SUM(book_value) FROM lines WHERE doc_id=d.id),0) book_value,
+               COALESCE((SELECT SUM((a.quantity*a.rate+500)/1000) FROM lines l JOIN assignments a ON a.line_id=l.id WHERE l.doc_id=d.id),0) wages
+          FROM documents d JOIN users u ON u.id=d.author_id
+          LEFT JOIN warehouses sw ON sw.id=COALESCE(d.source_id, CASE WHEN d.kind='report' THEN 1 END)
+          LEFT JOIN warehouses tw ON tw.id=d.target_id
+          LEFT JOIN documents src ON src.id=d.source_doc
+         WHERE d.id=?
+    """, (doc_id,))
     d.update({k:source[k] for k in ("memo","supplier","reference","payment","source_doc")})
     if d["kind"] == "sale":
         d.pop("reference",None)
@@ -220,12 +236,13 @@ def overview(db,user,day):
         SELECT COALESCE(SUM((a.quantity*a.rate+500)/1000),0) FROM assignments a JOIN lines l ON a.line_id=l.id
         JOIN documents d ON d.id=l.doc_id WHERE d.kind='report' AND d.status='posted' AND d.date=?
     """,(day,))
-    reports=list_documents(db,user,"report",start=day,end=day,status="posted",limit=50)["rows"]
-    day_drafts=list_documents(db,user,"report",start=day,end=day,status="draft",limit=50)["rows"]
     day_reports=records(db, BASE_DOC + """
         WHERE d.kind='report' AND d.date=? AND d.status IN ('posted','draft')
-        ORDER BY d.created_at DESC, d.id DESC LIMIT 50
+        ORDER BY d.created_at DESC, d.id DESC LIMIT 100
     """,(day,))
+    reports=[r for r in day_reports if r["status"]=="posted"][:50]
+    day_drafts=[r for r in day_reports if r["status"]=="draft"][:50]
+    day_reports=day_reports[:50]
     pending_total=scalar(db,"SELECT count(*) FROM documents d WHERE d.kind='report' AND d.status='draft'")
     pending_rows=records(db, BASE_DOC + """
         WHERE d.kind='report' AND d.status='draft'

@@ -10,10 +10,12 @@ import sqlite3
 import time
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
+from starlette.datastructures import MutableHeaders
 
 from . import operations as ops, read_model as read, schemas as model
 from .db import ROOT, SCHEMA, connect, now, password_hash, password_matches, record, records, matches_search, to_units, today, transaction
@@ -30,7 +32,44 @@ async def lifespan(_app):
     yield
 
 
+class PWAHeadersMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope["path"]
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                headers = MutableHeaders(scope=message)
+                if path.startswith("/api/"):
+                    headers.setdefault("cache-control", "no-store")
+                elif status == 200:
+                    if path == "/sw.js":
+                        headers["content-type"] = "application/javascript; charset=utf-8"
+                        headers["cache-control"] = "no-cache"
+                        headers["service-worker-allowed"] = "/"
+                    elif path == "/manifest.webmanifest":
+                        headers["content-type"] = "application/manifest+json; charset=utf-8"
+                        headers["cache-control"] = "no-cache"
+                    elif path.startswith("/assets/"):
+                        headers["cache-control"] = "public, max-age=31536000, immutable"
+                    elif path.startswith("/icons/"):
+                        headers["cache-control"] = "public, max-age=86400"
+                    elif path in ("/", "/index.html"):
+                        headers["cache-control"] = "no-cache"
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
 app = FastAPI(title="Швейная фабрика", lifespan=lifespan)
+app.add_middleware(PWAHeadersMiddleware)
+app.add_middleware(GZipMiddleware, minimum_size=500)
 COOKIE = "factory_session"
 SESSION_TTL = 60*60*24*7
 Date = date | None
@@ -562,5 +601,51 @@ def export_xlsx(filename,headers,rows):
 
 
 dist=ROOT / "dist"
+public_dir=ROOT / "web" / "public"
+
+
+def _resolve_static_file(*parts):
+    for base in (dist, public_dir):
+        candidate = (base.joinpath(*parts)).resolve()
+        if candidate.is_relative_to(base.resolve()) and candidate.is_file():
+            return candidate
+    return None
+
+
+@app.get("/sw.js", include_in_schema=False)
+def service_worker():
+    target = _resolve_static_file("sw.js")
+    if not target:
+        raise HTTPException(404, "Service worker not found")
+    return FileResponse(
+        target,
+        media_type="application/javascript; charset=utf-8",
+        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
+    )
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def web_manifest():
+    target = _resolve_static_file("manifest.webmanifest")
+    if not target:
+        raise HTTPException(404, "Web manifest not found")
+    return FileResponse(
+        target,
+        media_type="application/manifest+json; charset=utf-8",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/icons/{filename:path}", include_in_schema=False)
+def pwa_icon(filename: str):
+    if not filename or "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(404, "Icon not found")
+    target = _resolve_static_file("icons", filename)
+    if not target:
+        raise HTTPException(404, "Icon not found")
+    media = "image/png" if target.suffix == ".png" else "image/svg+xml" if target.suffix == ".svg" else None
+    return FileResponse(target, media_type=media, headers={"Cache-Control": "public, max-age=86400"})
+
+
 if dist.exists():
     app.mount("/",StaticFiles(directory=dist,html=True),name="desktop")

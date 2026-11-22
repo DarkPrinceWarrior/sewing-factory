@@ -161,6 +161,101 @@ export function useIsMobile(breakpoint = 768) {
   return mobile
 }
 
+export function useAnchoredPopover({
+  open = false,
+  anchorRef,
+  menuRef,
+  minWidth = 0,
+  fixedWidth = 0,
+  maxHeight = 280,
+  flipThreshold = 160,
+  gap = 5,
+  narrowFullWidth = false,
+  skip = false
+}) {
+  const [position, setPosition] = useState(null)
+
+  useLayoutEffect(() => {
+    if (!open || skip) {
+      setPosition(null)
+      return undefined
+    }
+    function place() {
+      const anchor = anchorRef?.current
+      if (!anchor) return
+      const rect = anchor.getBoundingClientRect()
+      const vv = window.visualViewport
+      const vw = vv ? vv.width : window.innerWidth
+      const vh = vv ? vv.height : window.innerHeight
+      const vTop = vv ? vv.offsetTop : 0
+      const vLeft = vv ? vv.offsetLeft : 0
+      const isNarrow = narrowFullWidth && vw <= 640
+      const margin = isNarrow ? 8 : 10
+
+      const spaceAbove = Math.max(56, rect.top - vTop - margin)
+      const spaceBelow = Math.max(56, vTop + vh - rect.bottom - margin)
+      const above = spaceBelow < flipThreshold && spaceAbove > spaceBelow
+      const capHeight = isNarrow ? Math.min(240, maxHeight) : maxHeight
+      const computedMaxHeight = Math.max(96, Math.min(capHeight, above ? spaceAbove : spaceBelow))
+
+      let style
+      if (isNarrow) {
+        const width = Math.max(160, vw - margin * 2)
+        style = {
+          left: Math.round(vLeft + margin),
+          width: Math.round(width),
+          maxHeight: Math.round(computedMaxHeight)
+        }
+      } else if (fixedWidth) {
+        const width = Math.min(fixedWidth, vw - margin * 2)
+        const left = Math.max(vLeft + margin, Math.min(rect.left, vLeft + vw - width - margin))
+        style = {
+          left: Math.round(left),
+          width: Math.round(width),
+          maxHeight: Math.round(computedMaxHeight)
+        }
+      } else {
+        const effectiveMin = Math.max(rect.width, minWidth)
+        const measured = menuRef?.current?.offsetWidth || 0
+        const targetW = Math.min(Math.max(effectiveMin, measured), vw - margin * 2)
+        const left = Math.max(vLeft + margin, Math.min(rect.left, vLeft + vw - targetW - margin))
+        style = {
+          left: Math.round(left),
+          minWidth: Math.round(Math.min(effectiveMin, vw - margin * 2)),
+          maxWidth: Math.round(vw - margin * 2),
+          maxHeight: Math.round(computedMaxHeight)
+        }
+      }
+
+      if (above) {
+        style.bottom = Math.round(window.innerHeight - rect.top + gap)
+      } else {
+        style.top = Math.round(rect.bottom + gap)
+      }
+      setPosition(style)
+    }
+
+    const onScroll = (event) => {
+      if (menuRef?.current && event.target && menuRef.current.contains(event.target)) return
+      place()
+    }
+
+    place()
+    window.addEventListener('resize', place)
+    window.visualViewport?.addEventListener('resize', place)
+    window.visualViewport?.addEventListener('scroll', place)
+    document.addEventListener('scroll', onScroll, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.visualViewport?.removeEventListener('resize', place)
+      window.visualViewport?.removeEventListener('scroll', place)
+      document.removeEventListener('scroll', onScroll, true)
+    }
+  }, [open, skip, anchorRef, menuRef, minWidth, fixedWidth, maxHeight, flipThreshold, gap, narrowFullWidth])
+
+  return position
+}
+
 /* --- Toast Notifications --- */
 const noopToast = Object.assign(() => {}, {
   notify: () => {},
@@ -376,14 +471,166 @@ export function ErrorBox({ error }) {
   return error ? <div className="notice error" role="alert">{typeof error === 'string' ? error : error.message}</div> : null
 }
 
+export function Skeleton({ width, height, radius, className = '' }) {
+  return (
+    <span
+      className={'skeleton' + (className ? ' ' + className : '')}
+      aria-hidden="true"
+      style={{ width, height, borderRadius: radius }}
+    />
+  )
+}
+
+export function PageSkeleton({ variant = 'table', rows = 5 }) {
+  if (variant === 'cards' || variant === 'overview') {
+    return (
+      <div className="page-skeleton" role="status" aria-label="Загрузка">
+        <div className="skeleton-card">
+          <div className="skeleton-row">
+            <Skeleton width="38%" height="18px" />
+            <Skeleton width="22%" height="18px" />
+          </div>
+          <Skeleton className="skeleton-line" width="100%" height="12px" />
+          <Skeleton className="skeleton-line" width="82%" height="12px" />
+          <Skeleton className="skeleton-line" width="66%" height="12px" />
+        </div>
+        <div className="skeleton-card">
+          <Skeleton className="skeleton-line" width="44%" height="16px" />
+          {Array.from({ length: 3 }, (_, i) => (
+            <div key={i} className="skeleton-row">
+              <Skeleton width="42%" height="14px" />
+              <Skeleton width="24%" height="14px" />
+              <Skeleton width="20%" height="14px" />
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="page-skeleton" role="status" aria-label="Загрузка">
+      <div className="skeleton-card">
+        <div className="skeleton-row">
+          <Skeleton width="52%" height="36px" radius="8px" />
+          <Skeleton width="28%" height="36px" radius="8px" />
+        </div>
+        {Array.from({ length: rows }, (_, i) => (
+          <div key={i} className="skeleton-row">
+            <Skeleton width={i % 2 === 0 ? '36%' : '44%'} height="14px" />
+            <Skeleton width="24%" height="14px" />
+            <Skeleton width="20%" height="14px" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function Loading({ text = 'Загрузка…' }) {
   return <div className="loading" role="status">{text}</div>
 }
 
-export function Guard({ request, children }) {
+export function Guard({ request, skeleton = 'table', children }) {
   if (request.error) return <ErrorBox error={request.error} />
-  if (request.data === undefined) return <Loading />
+  if (request.data === undefined) return <PageSkeleton variant={skeleton} />
   return children(request.data)
+}
+
+export function MetricStrip({ items = [], className = '' }) {
+  if (!items.length) return null
+  return (
+    <div className={'metric-strip' + (className ? ' ' + className : '')}>
+      {items.map((item, idx) => {
+        const key = item.key ?? item.label ?? idx
+        const interactive = Boolean(item.to || item.onClick)
+        const cls = ['metric-cell', interactive ? 'is-interactive' : '', item.tone ? 'is-' + item.tone : ''].filter(Boolean).join(' ')
+        const inner = (
+          <>
+            <span className="metric-label">{item.label}</span>
+            <strong className="metric-value">{item.value}</strong>
+            {item.meta && <small className="metric-meta">{item.meta}</small>}
+          </>
+        )
+        if (item.to) {
+          return <a key={key} href={href(item.to)} className={cls} aria-label={item.ariaLabel}>{inner}</a>
+        }
+        if (item.onClick) {
+          return <button key={key} type="button" className={cls} onClick={item.onClick} aria-label={item.ariaLabel}>{inner}</button>
+        }
+        return <div key={key} className={cls}>{inner}</div>
+      })}
+    </div>
+  )
+}
+
+export function Stepper({
+  value = '',
+  onChange,
+  min = 1,
+  max = 100000,
+  step = 1,
+  disabled = false,
+  required = false,
+  id,
+  className = '',
+  'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy
+}) {
+  const numVal = value === '' || value === null || value === undefined ? NaN : Number(value)
+  const canDec = !disabled && (!Number.isFinite(numVal) || numVal > min)
+  const canInc = !disabled && (!Number.isFinite(numVal) || numVal < max)
+
+  function apply(next) {
+    if (disabled) return
+    const clamped = Math.max(min, Math.min(max, next))
+    onChange?.(clamped)
+  }
+
+  return (
+    <div className={'stepper' + (disabled ? ' is-disabled' : '') + (className ? ' ' + className : '')}>
+      <button
+        type="button"
+        className="stepper-btn"
+        aria-label="Уменьшить"
+        disabled={!canDec}
+        onClick={() => apply(Number.isFinite(numVal) ? numVal - step : min)}
+      >
+        −
+      </button>
+      <input
+        id={id}
+        type="number"
+        inputMode="numeric"
+        className="stepper-input"
+        min={min}
+        max={max}
+        step={step}
+        required={required}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        aria-describedby={ariaDescribedBy}
+        value={value ?? ''}
+        onChange={e => {
+          const raw = e.target.value
+          if (raw === '') {
+            onChange?.('')
+            return
+          }
+          const parsed = Number(raw)
+          if (Number.isFinite(parsed)) onChange?.(parsed)
+        }}
+      />
+      <button
+        type="button"
+        className="stepper-btn"
+        aria-label="Увеличить"
+        disabled={!canInc}
+        onClick={() => apply(Number.isFinite(numVal) ? numVal + step : min)}
+      >
+        +
+      </button>
+    </div>
+  )
 }
 
 export function Field({ label, wide = false, className = '', children, help }) {
@@ -430,7 +677,6 @@ export function Select({
   const isMobile = useIsMobile(768)
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
-  const [position, setPosition] = useState(null)
 
   const currentStr = value === undefined || value === null ? '' : String(value)
 
@@ -466,33 +712,19 @@ export function Select({
     triggerRef.current?.focus({ preventScroll: true })
   }
 
-  useLayoutEffect(() => {
-    if (!open) {
-      setPosition(null)
-      return
-    }
-    function place() {
-      const anchor = triggerRef.current || rootRef.current
-      if (!anchor) return
-      const rect = anchor.getBoundingClientRect()
-      const margin = 10
-      const estHeight = Math.min(280, Math.max(48, options.length * 38 + 14))
-      const spaceBelow = window.innerHeight - rect.bottom - margin
-      const spaceAbove = rect.top - margin
-      const openAbove = spaceBelow < Math.min(estHeight, 160) && spaceAbove > spaceBelow
-      const maxHeight = Math.max(96, Math.min(280, openAbove ? spaceAbove : spaceBelow))
-      const menuWidth = menuRef.current?.offsetWidth || 0
-      const minWidth = Math.max(rect.width, className.includes('calendar-month-select') ? 148 : 0)
-      const effectiveWidth = Math.max(minWidth, menuWidth)
-      const left = Math.max(margin, Math.min(rect.left, window.innerWidth - effectiveWidth - margin))
-      setPosition({
-        left,
-        minWidth,
-        maxWidth: window.innerWidth - margin * 2,
-        maxHeight,
-        ...(openAbove ? { bottom: window.innerHeight - rect.top + 5 } : { top: rect.bottom + 5 })
-      })
-    }
+  const estHeight = Math.min(280, Math.max(48, options.length * 38 + 14))
+  const position = useAnchoredPopover({
+    open,
+    anchorRef: triggerRef,
+    menuRef,
+    minWidth: className.includes('calendar-month-select') ? 148 : 0,
+    maxHeight: 280,
+    flipThreshold: Math.min(estHeight, 160),
+    skip: isMobile
+  })
+
+  useEffect(() => {
+    if (!open) return undefined
     function outside(e) {
       if (!rootRef.current?.contains(e.target) && !menuRef.current?.contains(e.target)) {
         setOpen(false)
@@ -506,18 +738,13 @@ export function Select({
         triggerRef.current?.focus({ preventScroll: true })
       }
     }
-    place()
-    window.addEventListener('resize', place)
-    document.addEventListener('scroll', place, true)
     document.addEventListener('pointerdown', outside, true)
     document.addEventListener('keydown', onKey, true)
     return () => {
-      window.removeEventListener('resize', place)
-      document.removeEventListener('scroll', place, true)
       document.removeEventListener('pointerdown', outside, true)
       document.removeEventListener('keydown', onKey, true)
     }
-  }, [open, options.length, className])
+  }, [open])
 
   useLayoutEffect(() => {
     if (!open || !menuRef.current) return
@@ -773,7 +1000,6 @@ export function DateControl({
   const popoverRef = useRef(null)
   const isMobile = useIsMobile(768)
   const [open, setOpen] = useState(false)
-  const [position, setPosition] = useState(null)
 
   const minBound = min ? String(min).slice(0, month ? 7 : 10) : ''
   const maxBound = max ? String(max).slice(0, month ? 7 : 10) : ''
@@ -819,30 +1045,19 @@ export function DateControl({
     triggerRef.current?.focus({ preventScroll: true })
   }
 
-  useLayoutEffect(() => {
-    if (!open) {
-      setPosition(null)
-      return
-    }
-    function place() {
-      const anchor = triggerRef.current || rootRef.current
-      if (!anchor) return
-      const rect = anchor.getBoundingClientRect()
-      const margin = 12
-      const width = month ? 256 : 292
-      const estHeight = month ? 270 : 340
-      const left = Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin))
-      const spaceBelow = window.innerHeight - rect.bottom - margin
-      const spaceAbove = rect.top - margin
-      const above = spaceBelow < estHeight && spaceAbove > spaceBelow
-      const maxHeight = Math.max(200, Math.min(390, above ? spaceAbove : spaceBelow))
-      setPosition({
-        left,
-        width,
-        maxHeight,
-        ...(above ? { bottom: window.innerHeight - rect.top + 6 } : { top: rect.bottom + 6 })
-      })
-    }
+  const position = useAnchoredPopover({
+    open,
+    anchorRef: triggerRef,
+    menuRef: popoverRef,
+    fixedWidth: month ? 256 : 292,
+    maxHeight: 390,
+    flipThreshold: month ? 270 : 340,
+    gap: 6,
+    skip: isMobile
+  })
+
+  useEffect(() => {
+    if (!open) return undefined
     function outside(e) {
       if (!rootRef.current?.contains(e.target) && !popoverRef.current?.contains(e.target) && !e.target.closest?.('[data-select-portal]')) {
         setOpen(false)
@@ -857,18 +1072,13 @@ export function DateControl({
         triggerRef.current?.focus({ preventScroll: true })
       }
     }
-    place()
-    window.addEventListener('resize', place)
-    document.addEventListener('scroll', place, true)
     document.addEventListener('pointerdown', outside, true)
     document.addEventListener('keydown', onKey, true)
     return () => {
-      window.removeEventListener('resize', place)
-      document.removeEventListener('scroll', place, true)
       document.removeEventListener('pointerdown', outside, true)
       document.removeEventListener('keydown', onKey, true)
     }
-  }, [open, month])
+  }, [open])
 
   useEffect(() => {
     if (!open || !keyboardMoved.current || !popoverRef.current) return
@@ -1223,6 +1433,7 @@ export function Table({
   empty = 'Записей пока нет',
   label = 'Таблица',
   rowKey,
+  rowHref,
   hasPager = false,
   mobileCards = true,
   footer = null,
@@ -1231,6 +1442,14 @@ export function Table({
 }) {
   const explicitPrimary = columns.findIndex(c => c.primary)
   const primaryIndex = explicitPrimary >= 0 ? explicitPrimary : 0
+
+  function handleRowClick(e, row, i, targetHref) {
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+    if (window.getSelection?.()?.toString().trim()) return
+    if (e.target.closest('a, button, input, select, textarea, label, [role="button"], [role="option"]')) return
+    if (onRowClick) onRowClick(row, i)
+    else if (targetHref) go(targetHref)
+  }
 
   return (
     <div className={'table-frame' + (hasPager ? ' has-pagination' : '') + (mobileCards ? ' mobile-cards' : '') + (className ? ' ' + className : '')}>
@@ -1249,35 +1468,40 @@ export function Table({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, i) => (
-              <tr
-                key={rowKey?.(row) ?? row.id ?? row.item_id ?? i}
-                className={onRowClick ? 'is-clickable' : undefined}
-                onClick={onRowClick ? () => onRowClick(row, i) : undefined}
-              >
-                {columns.map((col, j) => {
-                  const isPrimary = j === primaryIndex
-                  const mobileKind = col.mobileKind || (
-                    ['Действия', ''].includes(col.label)
-                      ? 'actions'
-                      : col.label === 'Статус'
-                        ? 'status'
-                        : undefined
-                  )
-                  return (
-                    <td
-                      key={j}
-                      className={[col.align, col.className].filter(Boolean).join(' ')}
-                      data-label={col.label || undefined}
-                      data-primary={isPrimary ? 'true' : undefined}
-                      data-kind={mobileKind}
-                    >
-                      {col.cell(row, i)}
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
+            {rows.map((row, i) => {
+              const targetHref = rowHref ? rowHref(row, i) : null
+              const clickable = Boolean(onRowClick || targetHref)
+              return (
+                <tr
+                  key={rowKey?.(row) ?? row.id ?? row.item_id ?? i}
+                  className={clickable ? 'is-clickable' : undefined}
+                  onClick={clickable ? e => handleRowClick(e, row, i, targetHref) : undefined}
+                >
+                  {columns.map((col, j) => {
+                    const isPrimary = j === primaryIndex
+                    const mobileKind = col.mobileKind || col.kind || (
+                      ['Действия', ''].includes(col.label)
+                        ? 'actions'
+                        : col.label === 'Статус'
+                          ? 'status'
+                          : undefined
+                    )
+                    return (
+                      <td
+                        key={j}
+                        className={[col.align, col.className].filter(Boolean).join(' ')}
+                        data-label={col.label || undefined}
+                        data-primary={isPrimary ? 'true' : undefined}
+                        data-mobile-full={col.mobileFull ? 'true' : undefined}
+                        data-kind={mobileKind}
+                      >
+                        {col.cell(row, i)}
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            })}
             {!rows.length && (
               <tr>
                 <td colSpan={columns.length} className="empty">
@@ -1294,11 +1518,35 @@ export function Table({
 }
 
 export function Pager({ page, size = 15, total, change, onSizeChange, pageSizes = [15, 30, 50] }) {
+  const isMobile = useIsMobile(767)
   const end = Math.max(1, Math.ceil(total / size))
   if (!total) return null
   const safePage = Math.max(1, Math.min(page, end))
   const from = (safePage - 1) * size + 1
   const to = Math.min(total, safePage * size)
+
+  if (isMobile) {
+    return (
+      <div className="pager is-compact">
+        <span className="pager-count" role="status">
+          {total <= size
+            ? number(total)
+            : number(from) + '–' + number(to) + ' / ' + number(total)}
+        </span>
+        {end > 1 && (
+          <div className="actions">
+            <Button className="pager-btn" aria-label="Предыдущая страница" disabled={safePage <= 1} onClick={() => change(safePage - 1)}>
+              ‹
+            </Button>
+            <span className="pager-pages">Стр. {number(safePage)} / {number(end)}</span>
+            <Button className="pager-btn" aria-label="Следующая страница" disabled={safePage >= end} onClick={() => change(safePage + 1)}>
+              ›
+            </Button>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="pager">
@@ -1396,7 +1644,7 @@ export function useSearchOptions(filters) {
   const search = filters.search || ''
   const [ready, setReady] = useState(search)
   useEffect(() => {
-    const timeout = setTimeout(() => setReady(search), 220)
+    const timeout = setTimeout(() => setReady(search), 40)
     return () => clearTimeout(timeout)
   }, [search])
   return { options: { ...filters, ...('search' in filters ? { search: ready } : {}) }, pending: ready !== search }
@@ -1542,6 +1790,34 @@ export function RegistryTools({ state, placeholder, periodLabel = false, total, 
   const ws = useWorkspace()
   const items = ws?.items || []
   const warehouses = ws?.warehouses || []
+  const [inputValue, setInputValue] = useState(filters.search || '')
+  const searchTimer = useRef(null)
+
+  useEffect(() => {
+    setInputValue(filters.search || '')
+  }, [filters.search])
+
+  useEffect(() => () => {
+    if (searchTimer.current) clearTimeout(searchTimer.current)
+  }, [])
+
+  function handleSearchChange(val) {
+    setInputValue(val)
+    if (searchTimer.current) clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => {
+      searchTimer.current = null
+      change('search', val)
+    }, 220)
+  }
+
+  function clearSearchImmediately() {
+    if (searchTimer.current) {
+      clearTimeout(searchTimer.current)
+      searchTimer.current = null
+    }
+    setInputValue('')
+    if (filters.search) change('search', '')
+  }
 
   const place = warehouses.find(w => String(w.id) === String(filters.warehouse))?.city
   const product = items.find(i => String(i.id) === String(filters.item))
@@ -1621,24 +1897,24 @@ export function RegistryTools({ state, placeholder, periodLabel = false, total, 
               type="search"
               aria-label="Поиск"
               placeholder={placeholder}
-              value={filters.search || ''}
+              value={inputValue}
               maxLength={100}
               onKeyDown={e => {
-                if (e.key === 'Escape' && filters.search) {
+                if (e.key === 'Escape' && inputValue) {
                   e.preventDefault()
                   e.stopPropagation()
-                  change('search', '')
+                  clearSearchImmediately()
                 }
               }}
-              onChange={e => change('search', e.target.value)}
+              onChange={e => handleSearchChange(e.target.value)}
             />
-            {filters.search && (
+            {inputValue && (
               <button
                 type="button"
                 aria-label="Очистить поиск"
                 onClick={e => {
                   e.currentTarget.parentElement.querySelector('input').focus()
-                  change('search', '')
+                  clearSearchImmediately()
                 }}
               >
                 ×
@@ -1683,13 +1959,33 @@ export function RegistryTools({ state, placeholder, periodLabel = false, total, 
 /* --- Modals, Dialogs & Bottom Sheets --- */
 let scrollLockCount = 0
 let savedBodyOverflow = ''
+let vvCleanup = null
 const activeSheetStack = []
+
+function syncVisualViewportVars() {
+  const vv = typeof window !== 'undefined' ? window.visualViewport : null
+  if (!vv) return
+  document.documentElement.style.setProperty('--vv-offset-top', `${Math.round(vv.offsetTop)}px`)
+  document.documentElement.style.setProperty('--vv-height', `${Math.round(vv.height)}px`)
+}
 
 function lockBodyScroll() {
   if (scrollLockCount === 0) {
     savedBodyOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     document.body.classList.add('sheet-open')
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null
+    if (vv) {
+      syncVisualViewportVars()
+      vv.addEventListener('resize', syncVisualViewportVars)
+      vv.addEventListener('scroll', syncVisualViewportVars)
+      vvCleanup = () => {
+        vv.removeEventListener('resize', syncVisualViewportVars)
+        vv.removeEventListener('scroll', syncVisualViewportVars)
+        document.documentElement.style.removeProperty('--vv-offset-top')
+        document.documentElement.style.removeProperty('--vv-height')
+      }
+    }
   }
   scrollLockCount += 1
 }
@@ -1699,12 +1995,15 @@ function unlockBodyScroll() {
   if (scrollLockCount === 0) {
     document.body.style.overflow = savedBodyOverflow
     document.body.classList.remove('sheet-open')
+    vvCleanup?.()
+    vvCleanup = null
   }
 }
 
 export function Sheet({
   open = false,
   onClose,
+  close,
   title,
   subtitle,
   footer = null,
@@ -1716,8 +2015,10 @@ export function Sheet({
   const titleId = useId()
   const sheetRef = useRef(null)
   const backdropDown = useRef(false)
-  const onCloseRef = useRef(onClose)
-  onCloseRef.current = onClose
+  const dragState = useRef({ active: false, startY: 0, dy: 0 })
+  const effectiveClose = onClose || close
+  const onCloseRef = useRef(effectiveClose)
+  onCloseRef.current = effectiveClose
   const closeDisabledRef = useRef(closeDisabled)
   closeDisabledRef.current = closeDisabled
 
@@ -1753,7 +2054,53 @@ export function Sheet({
     }
   }, [open])
 
+  function onSwipeStart(e) {
+    if (closeDisabled || e.touches.length !== 1) return
+    dragState.current = { active: true, startY: e.touches[0].clientY, dy: 0 }
+    if (sheetRef.current) {
+      sheetRef.current.style.transition = 'none'
+    }
+  }
+
+  function onSwipeMove(e) {
+    if (!dragState.current.active || e.touches.length !== 1) return
+    const dy = Math.max(0, e.touches[0].clientY - dragState.current.startY)
+    dragState.current.dy = dy
+    if (sheetRef.current && dy > 0) {
+      sheetRef.current.style.transform = `translateY(${Math.round(dy)}px)`
+    }
+  }
+
+  function onSwipeEnd() {
+    if (!dragState.current.active) return
+    const { dy } = dragState.current
+    dragState.current = { active: false, startY: 0, dy: 0 }
+    const el = sheetRef.current
+    if (dy > 80 && !closeDisabled) {
+      if (el) {
+        el.style.transition = ''
+        el.style.transform = ''
+      }
+      onCloseRef.current?.()
+      return
+    }
+    if (el) {
+      el.style.transition = 'transform 180ms cubic-bezier(0.22, 1, 0.36, 1)'
+      el.style.transform = ''
+      window.setTimeout(() => {
+        if (sheetRef.current) sheetRef.current.style.transition = ''
+      }, 200)
+    }
+  }
+
   if (!open) return null
+
+  const swipeHandlers = {
+    onTouchStart: onSwipeStart,
+    onTouchMove: onSwipeMove,
+    onTouchEnd: onSwipeEnd,
+    onTouchCancel: onSwipeEnd
+  }
 
   const content = (
     <div
@@ -1769,19 +2116,19 @@ export function Sheet({
     >
       <div
         ref={sheetRef}
-        className={'sheet' + (className ? ' ' + className : '')}
+        className={'sheet sheet-panel' + (className ? ' ' + className : '')}
         role="dialog"
         aria-modal="true"
         aria-labelledby={title ? titleId : undefined}
       >
-        <div className="sheet-handle" aria-hidden="true" />
-        {(title || subtitle || onClose) && (
-          <header className="sheet-head">
+        <div className="sheet-handle" aria-hidden="true" {...swipeHandlers} />
+        {(title || subtitle || effectiveClose) && (
+          <header className="sheet-head" {...swipeHandlers}>
             <div className="sheet-head-copy">
               {title && <h2 id={titleId} className="sheet-title">{title}</h2>}
               {subtitle && <p className="sheet-sub">{subtitle}</p>}
             </div>
-            {onClose && (
+            {effectiveClose && (
               <Button
                 className="icon-only sheet-close"
                 aria-label="Закрыть"
@@ -1802,6 +2149,107 @@ export function Sheet({
   return typeof document !== 'undefined'
     ? createPortal(content, portalTarget || document.body)
     : content
+}
+
+export function PwaInstallGuide({
+  open = false,
+  close,
+  onClose,
+  deferredPrompt = null,
+  onInstall,
+  isStandalone = false
+}) {
+  const [platform, setPlatform] = useState(() => {
+    if (typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent)) return 'android'
+    return 'ios'
+  })
+  const handleClose = onClose || close
+
+  const steps = platform === 'ios'
+    ? [
+        {
+          num: '1',
+          title: 'Нажмите «Поделиться» внизу Safari',
+          text: 'Иконка квадрата со стрелкой вверх на нижней панели браузера.'
+        },
+        {
+          num: '2',
+          title: 'Выберите «На экран „Домой“»',
+          text: 'Прокрутите список действий вниз и нажмите пункт добавления ярлыка.'
+        },
+        {
+          num: '3',
+          title: 'Нажмите «Добавить» справа сверху',
+          text: '«Швейная фабрика» откроется на весь экран без адресной строки.'
+        }
+      ]
+    : [
+        {
+          num: '1',
+          title: 'Откройте меню «⋮» в правом верхнем углу Chrome',
+          text: 'Кнопка с тремя вертикальными точками рядом с адресной строкой.'
+        },
+        {
+          num: '2',
+          title: 'Нажмите «Установить приложение»',
+          text: 'Или «Добавить на главный экран» в старых версиях браузера.'
+        },
+        {
+          num: '3',
+          title: 'Подтвердите установку',
+          text: 'Ярлык появится на рабочем столе и будет открываться как нативное приложение.'
+        }
+      ]
+
+  return (
+    <Sheet
+      open={open}
+      onClose={handleClose}
+      title="Установить на телефон"
+      subtitle="Быстрый запуск на весь экран без панели браузера"
+      footer={
+        <Button kind="primary" className="wide" onClick={handleClose}>
+          Понятно
+        </Button>
+      }
+    >
+      <div className="pwa-guide">
+        {isStandalone ? (
+          <div className="inline-note info">
+            Приложение уже установлено и запущено в полноэкранном режиме.
+          </div>
+        ) : (
+          <>
+            {deferredPrompt && onInstall && (
+              <Button kind="primary" className="wide" onClick={onInstall}>
+                <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M10 3v9.5M6.5 9.5 10 13l3.5-3.5M4 16.5h12" />
+                </svg>
+                Установить приложение
+              </Button>
+            )}
+            <Tabs
+              label="Выбор платформы"
+              value={platform}
+              onChange={setPlatform}
+              items={[['ios', 'iPhone (Safari)'], ['android', 'Android (Chrome)']]}
+            />
+            <div className="pwa-steps">
+              {steps.map(step => (
+                <div key={step.num} className="pwa-step">
+                  <span className="pwa-step-num" aria-hidden="true">{step.num}</span>
+                  <div className="pwa-step-copy">
+                    <strong>{step.title}</strong>
+                    <span>{step.text}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </Sheet>
+  )
 }
 
 export function Dialog({ title, close, children, footer = null, closeDisabled = false, className = '' }) {

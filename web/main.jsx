@@ -11,6 +11,7 @@ import {
   Field,
   Loading,
   Page,
+  PwaInstallGuide,
   Sheet,
   ToastProvider,
   api,
@@ -708,6 +709,116 @@ function RegisterBreadcrumbs({ crumbs }) {
   )
 }
 
+function moscowDateIso() {
+  try {
+    return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Moscow' }).format(new Date())
+  } catch {
+    return new Date().toISOString().slice(0, 10)
+  }
+}
+
+function isRunningStandalone() {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia?.('(display-mode: standalone)').matches || Boolean(window.navigator?.standalone)
+}
+
+function useOnlineStatus(onReconnect) {
+  const [online, setOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine))
+  const reconnectRef = useRef(onReconnect)
+  reconnectRef.current = onReconnect
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setOnline(true)
+      reconnectRef.current?.()
+    }
+    const handleOffline = () => setOnline(false)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [])
+
+  return online
+}
+
+function usePwaInstall(toast) {
+  const [deferredPrompt, setDeferredPrompt] = useState(null)
+  const [isStandalone, setIsStandalone] = useState(isRunningStandalone)
+  const [installOpen, setInstallOpen] = useState(false)
+
+  useEffect(() => {
+    const mq = window.matchMedia?.('(display-mode: standalone)')
+    const syncStandalone = () => setIsStandalone(isRunningStandalone())
+    const onBeforeInstall = (e) => {
+      e.preventDefault()
+      setDeferredPrompt(e)
+    }
+    const onInstalled = () => {
+      setDeferredPrompt(null)
+      setInstallOpen(false)
+      setIsStandalone(true)
+      toast?.success('Приложение установлено')
+    }
+    window.addEventListener('beforeinstallprompt', onBeforeInstall)
+    window.addEventListener('appinstalled', onInstalled)
+    mq?.addEventListener?.('change', syncStandalone)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall)
+      window.removeEventListener('appinstalled', onInstalled)
+      mq?.removeEventListener?.('change', syncStandalone)
+    }
+  }, [toast])
+
+  const openInstallGuide = useCallback(() => setInstallOpen(true), [])
+  const closeInstallGuide = useCallback(() => setInstallOpen(false), [])
+
+  const triggerInstall = useCallback(async () => {
+    if (!deferredPrompt) {
+      setInstallOpen(true)
+      return false
+    }
+    try {
+      await deferredPrompt.prompt()
+      const choice = await deferredPrompt.userChoice
+      setDeferredPrompt(null)
+      if (choice?.outcome === 'accepted') {
+        setInstallOpen(false)
+        return true
+      }
+      return false
+    } catch {
+      setDeferredPrompt(null)
+      setInstallOpen(true)
+      return false
+    }
+  }, [deferredPrompt])
+
+  return {
+    deferredPrompt,
+    isStandalone,
+    canInstallPwa: Boolean(deferredPrompt),
+    installOpen,
+    openInstallGuide,
+    closeInstallGuide,
+    triggerInstall
+  }
+}
+
+function OfflineBanner({ online }) {
+  if (online) return null
+  return (
+    <div className="offline-banner" role="status" aria-live="polite">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M2.5 2.5 17.5 17.5M5.2 12.2a7 7 0 0 1 6.3-1.6M8.1 15a3.5 3.5 0 0 1 3.8 0M2.8 9.2a10.5 10.5 0 0 1 6.1-2.5M13.5 7.2a10.5 10.5 0 0 1 3.7 2" />
+      </svg>
+      <span>Нет подключения к сети — данные могут быть неактуальны</span>
+    </div>
+  )
+}
+
 function MobileHeader({ workspace, crumbs, home, profileOpen, onOpenProfile }) {
   const { user } = workspace
   const regional = user.role === 'regional'
@@ -723,11 +834,12 @@ function MobileHeader({ workspace, crumbs, home, profileOpen, onOpenProfile }) {
             className="mobile-back-btn"
             href={href(parent[0])}
             aria-label={'Назад: ' + parent[1]}
+            title={parent[1]}
           >
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <path d="m12.5 5-5 5 5 5" />
             </svg>
-            <span>{parent[1]}</span>
+            <span>Назад</span>
           </a>
           <span className="mobile-header-title" title={currentCrumb?.[1]}>
             {currentCrumb?.[1]}
@@ -756,7 +868,7 @@ function MobileHeader({ workspace, crumbs, home, profileOpen, onOpenProfile }) {
   )
 }
 
-function BottomNav({ current, user, itemBadge, moreOpen, onOpenMore }) {
+function BottomNav({ current, user, itemBadge, moreOpen, onOpenMore, onCloseSheets }) {
   const regional = user.role === 'regional'
   const tabs = regional
     ? [
@@ -782,6 +894,7 @@ function BottomNav({ current, user, itemBadge, moreOpen, onOpenMore }) {
       onOpenMore()
       return
     }
+    onCloseSheets?.()
     if (current === to) {
       window.scrollTo({ top: 0, behavior: 'smooth' })
       return
@@ -831,7 +944,7 @@ function BottomNav({ current, user, itemBadge, moreOpen, onOpenMore }) {
   )
 }
 
-function MoreSheet({ open, onClose, current, user, logout }) {
+function MoreSheet({ open, onClose, current, user, logout, isStandalone, onInstallPwa }) {
   const secondaryItems = user.role === 'master'
     ? [
         ['/people', 'Сотрудники', 'people'],
@@ -870,6 +983,26 @@ function MoreSheet({ open, onClose, current, user, logout }) {
           )
         })}
       </div>
+      {!isStandalone && (
+        <div className="sheet-menu-list">
+          <button
+            type="button"
+            className="sheet-menu-item"
+            onClick={() => {
+              onClose()
+              onInstallPwa()
+            }}
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M10 3v9.5M6.5 9.5 10 13l3.5-3.5M4 16.5h12" />
+            </svg>
+            <span>Установить приложение</span>
+            <svg className="sheet-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m6 3.5 4.5 4.5L6 12.5" />
+            </svg>
+          </button>
+        </div>
+      )}
       <div className="sheet-menu-list">
         <button
           type="button"
@@ -889,7 +1022,7 @@ function MoreSheet({ open, onClose, current, user, logout }) {
   )
 }
 
-function ProfileSheet({ open, onClose, user, updatedAt, refreshing, logout }) {
+function ProfileSheet({ open, onClose, user, updatedAt, refreshing, logout, isStandalone, onInstallPwa }) {
   const regional = user.role === 'regional'
   return (
     <Sheet open={open} onClose={onClose} title={user.name} subtitle={user.email}>
@@ -935,6 +1068,24 @@ function ProfileSheet({ open, onClose, user, updatedAt, refreshing, logout }) {
             <path d="m6 3.5 4.5 4.5L6 12.5" />
           </svg>
         </button>
+        {!isStandalone && (
+          <button
+            type="button"
+            className="sheet-menu-item"
+            onClick={() => {
+              onClose()
+              onInstallPwa()
+            }}
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M10 3v9.5M6.5 9.5 10 13l3.5-3.5M4 16.5h12" />
+            </svg>
+            <span>Установить приложение</span>
+            <svg className="sheet-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m6 3.5 4.5 4.5L6 12.5" />
+            </svg>
+          </button>
+        )}
         <button
           type="button"
           className="sheet-menu-item is-danger"
@@ -953,7 +1104,7 @@ function ProfileSheet({ open, onClose, user, updatedAt, refreshing, logout }) {
   )
 }
 
-function Shell({ path, workspace, refresh, refreshing, updatedAt, logout }) {
+function Shell({ path, workspace, refresh, refreshing, updatedAt, online, pwa, logout }) {
   const { user } = workspace
   const regional = user.role === 'regional'
   const home = homePath(user)
@@ -965,6 +1116,8 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, logout }) {
   const [revision, setRevision] = useState(0)
   const [moreOpen, setMoreOpen] = useState(false)
   const [profileSheetOpen, setProfileSheetOpen] = useState(false)
+  const calendarDayRef = useRef(moscowDateIso())
+  const refreshPage = useCallback(() => setRevision(n => n + 1), [])
 
   const groups = (regional ? regionalGroups(user.city) : menuGroups)
     .map(group => ({
@@ -996,6 +1149,26 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, logout }) {
     window.scrollTo(0, 0)
   }, [current])
 
+  useEffect(() => {
+    const syncDayRollover = () => {
+      const nextDay = moscowDateIso()
+      if (nextDay !== calendarDayRef.current) {
+        calendarDayRef.current = nextDay
+        refresh()
+        refreshPage()
+      }
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') syncDayRollover()
+    }
+    const timer = window.setInterval(syncDayRollover, 60_000)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [refresh, refreshPage])
+
   return (
     <AppContext.Provider
       value={{
@@ -1004,10 +1177,15 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, logout }) {
         logout,
         registryState,
         setPageHeading,
-        refreshPage: () => setRevision(n => n + 1)
+        refreshPage,
+        openInstallGuide: pwa.openInstallGuide,
+        installPwa: pwa.triggerInstall,
+        isStandalone: pwa.isStandalone,
+        canInstallPwa: pwa.canInstallPwa
       }}
     >
       <div className="shell">
+        <OfflineBanner online={online} />
         <a
           className="skip"
           href="#workspace"
@@ -1086,7 +1264,7 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, logout }) {
           <WorkspaceBoundary
             key={path + '-' + revision}
             home={home}
-            onReset={() => setRevision(n => n + 1)}
+            onReset={refreshPage}
           >
             <Route key={path + '-' + revision} path={current} user={user} />
           </WorkspaceBoundary>
@@ -1097,6 +1275,10 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, logout }) {
           itemBadge={itemBadge}
           moreOpen={moreOpen}
           onOpenMore={() => setMoreOpen(true)}
+          onCloseSheets={() => {
+            setMoreOpen(false)
+            setProfileSheetOpen(false)
+          }}
         />
         {!regional && (
           <MoreSheet
@@ -1105,6 +1287,8 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, logout }) {
             current={current}
             user={user}
             logout={logout}
+            isStandalone={pwa.isStandalone}
+            onInstallPwa={pwa.triggerInstall}
           />
         )}
         <ProfileSheet
@@ -1114,6 +1298,15 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, logout }) {
           updatedAt={updatedAt}
           refreshing={refreshing}
           logout={logout}
+          isStandalone={pwa.isStandalone}
+          onInstallPwa={pwa.triggerInstall}
+        />
+        <PwaInstallGuide
+          open={pwa.installOpen}
+          onClose={pwa.closeInstallGuide}
+          deferredPrompt={pwa.deferredPrompt}
+          onInstall={pwa.triggerInstall}
+          isStandalone={pwa.isStandalone}
         />
       </div>
     </AppContext.Provider>
@@ -1128,6 +1321,10 @@ function App() {
   const [updatedAt, setUpdatedAt] = useState(null)
   const clearToasts = useClearToasts()
   const toast = useToast()
+  const online = useOnlineStatus(() => {
+    if (request.data) request.refresh()
+  })
+  const pwa = usePwaInstall(toast)
 
   useEffect(() => {
     if (request.data && !request.loading) {
@@ -1160,26 +1357,32 @@ function App() {
 
   if (out || request.error?.status === 401 || request.error?.status === 403) {
     return (
-      <Login
-        initialError={!out && request.error?.status === 403 ? request.error.message : ''}
-        done={() => {
-          setOut(false)
-          request.refresh()
-        }}
-      />
+      <>
+        <OfflineBanner online={online} />
+        <Login
+          initialError={!out && request.error?.status === 403 ? request.error.message : ''}
+          done={() => {
+            setOut(false)
+            request.refresh()
+          }}
+        />
+      </>
     )
   }
 
   if (request.error) {
     return (
-      <div className="boot">
-        <Card className="forbidden-card" title="Не удалось загрузить рабочее пространство">
-          <ErrorBox error={request.error} />
-          <div className="left-actions">
-            <Button kind="primary" onClick={request.refresh}>Повторить</Button>
-          </div>
-        </Card>
-      </div>
+      <>
+        <OfflineBanner online={online} />
+        <div className="boot">
+          <Card className="forbidden-card" title="Не удалось загрузить рабочее пространство">
+            <ErrorBox error={request.error} />
+            <div className="left-actions">
+              <Button kind="primary" onClick={request.refresh}>Повторить</Button>
+            </div>
+          </Card>
+        </div>
+      </>
     )
   }
 
@@ -1200,6 +1403,8 @@ function App() {
         refresh={request.refresh}
         refreshing={request.loading}
         updatedAt={updatedAt}
+        online={online}
+        pwa={pwa}
         logout={logout}
       />
     </>
@@ -1211,3 +1416,18 @@ createRoot(document.getElementById('root')).render(
     <App />
   </ToastProvider>
 )
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  let swRegistration = null
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/sw.js', { scope: '/' })
+      .then(reg => { swRegistration = reg })
+      .catch(() => {})
+  })
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      swRegistration?.update().catch(() => {})
+    }
+  })
+}

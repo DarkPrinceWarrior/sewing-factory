@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { matchesSearch } from './ui'
+import { matchesSearch, useAnchoredPopover } from './ui'
 
 function normalizeEntry(entry) {
   if (Array.isArray(entry)) {
@@ -64,7 +64,6 @@ export function SearchPicker({
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(0)
-  const [position, setPosition] = useState(null)
 
   const normalized = useMemo(() => entries.map(normalizeEntry), [entries])
   const selected = normalized.find(item => String(item.key) === String(value))
@@ -100,56 +99,25 @@ export function SearchPicker({
     input.current?.setCustomValidity(required && !selected && query ? 'Выберите значение из списка.' : '')
   }, [query, selected, required])
 
-  useLayoutEffect(() => {
-    if (!open) {
-      setPosition(null)
-      return
-    }
-    function place() {
-      const anchor = root.current || input.current
-      if (!anchor) return
-      const rect = anchor.getBoundingClientRect()
-      const vv = window.visualViewport
-      const vw = vv ? vv.width : window.innerWidth
-      const vh = vv ? vv.height : window.innerHeight
-      const vTop = vv ? vv.offsetTop : 0
-      const vLeft = vv ? vv.offsetLeft : 0
-      const isNarrow = vw <= 640
-      const margin = isNarrow ? 8 : 12
-      const minW = Math.min(260, vw - margin * 2)
-      const width = isNarrow
-        ? Math.max(160, vw - margin * 2)
-        : Math.min(Math.max(rect.width, minW), vw - margin * 2)
-      const left = isNarrow
-        ? vLeft + margin
-        : Math.max(vLeft + margin, Math.min(rect.left, vLeft + vw - width - margin))
-      const high = Math.max(56, rect.top - vTop - 10)
-      const low = Math.max(56, vTop + vh - rect.bottom - 10)
-      const above = low < (isNarrow ? 150 : 180) && high > low
-      const maxHeight = Math.min(isNarrow ? 240 : 280, above ? high : low)
-      setPosition({
-        left,
-        width,
-        maxHeight,
-        ...(above ? { bottom: window.innerHeight - rect.top + 5 } : { top: rect.bottom + 5 })
-      })
-    }
+  const position = useAnchoredPopover({
+    open,
+    anchorRef: root,
+    menuRef: popup,
+    minWidth: 260,
+    maxHeight: 280,
+    flipThreshold: 170,
+    narrowFullWidth: true
+  })
+
+  useEffect(() => {
+    if (!open) return undefined
     function outside(e) {
       if (!root.current?.contains(e.target) && !popup.current?.contains(e.target)) {
         closeMenu()
       }
     }
-    place()
-    window.addEventListener('resize', place)
-    window.visualViewport?.addEventListener('resize', place)
-    window.visualViewport?.addEventListener('scroll', place)
-    document.addEventListener('scroll', place, true)
     document.addEventListener('pointerdown', outside, true)
     return () => {
-      window.removeEventListener('resize', place)
-      window.visualViewport?.removeEventListener('resize', place)
-      window.visualViewport?.removeEventListener('scroll', place)
-      document.removeEventListener('scroll', place, true)
       document.removeEventListener('pointerdown', outside, true)
     }
   }, [open])

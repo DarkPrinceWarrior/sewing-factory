@@ -1,8 +1,8 @@
-import React, {useState} from 'react'
+import React, {useId, useState} from 'react'
 import {DocumentHistory, Wip} from './production'
 import {
   ActionRow, Button, Card, Confirm, DateControl, DateRange, Details, Dialog, Download, ErrorBox, Field,
-  FormActions, Guard, Page, Pager, RegistryTools, Select, Status, Table, Tabs,
+  FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Select, Status, Stepper, Table, Tabs,
   api, dateTime, dayText, go, href, itemText, matchesSearch, money, number, payments, qty, roleCanWrite,
   routeWith, useAction, useFilters, useRemote, useSearchOptions, useToast, useWorkspace
 } from './ui'
@@ -181,39 +181,42 @@ function CentralInventory({add, setAdd}) {
   return (
     <>
       {!isMaster && (
-        <Card className="kpi-grid cols-3">
-          <div className="kpi-item">
-            <span className="kpi-label">Готовая продукция на складах</span>
-            <strong className="kpi-value">{qty(total(retail, 'quantity'))} компл.</strong>
-            <small className="kpi-meta">{retail.length} складов в {new Set(retail.map(w => w.city)).size} городах</small>
-          </div>
-          <div className="kpi-item">
-            <span className="kpi-label">Стоимость готовой продукции</span>
-            <strong className="kpi-value">{money(total(retail, 'value'))}</strong>
-            <small className="kpi-meta">По учётной стоимости</small>
-          </div>
-          <div className="kpi-item">
-            <span className="kpi-label">В пути</span>
-            <strong className="kpi-value">
-              {moving?.documents
-                ? <a className="neutral-link" href={href(transitPath)}>{qty(moving.quantity)} компл.</a>
-                : qty(moving?.quantity) + ' компл.'}
-            </strong>
-            <small className="kpi-meta">
-              {moving?.documents
-                ? <a href={href(transitPath)}>Ожидают приёмки: {number(moving.documents)}</a>
-                : 'Открытых перемещений нет'}
-            </small>
-          </div>
-        </Card>
+        <MetricStrip
+          items={[
+            {
+              key: 'finished',
+              label: 'Готовая продукция',
+              value: qty(total(retail, 'quantity')) + ' компл.',
+              meta: retail.length + ' складов · ' + new Set(retail.map(w => w.city)).size + ' гор.'
+            },
+            {
+              key: 'value',
+              label: 'Стоимость запаса',
+              value: money(total(retail, 'value')),
+              meta: 'По учётной стоимости'
+            },
+            {
+              key: 'transit',
+              label: 'В пути',
+              value: qty(moving?.quantity) + ' компл.',
+              meta: moving?.documents ? 'Ожидают приёмки: ' + number(moving.documents) : 'Открытых перемещений нет',
+              to: moving?.documents ? transitPath : undefined
+            }
+          ]}
+        />
       )}
       <Card
         className="warehouse-register"
         title={isMaster ? 'Склады · Иваново' : 'Склады по городам'}
-        actions={ws.user.role === 'admin' && <Button kind="primary" onClick={() => setAdd(true)}>Добавить склад</Button>}
       >
         <RegistryTools state={state} total={rows.length} placeholder="Название, город или адрес"/>
-        <Table label={isMaster ? 'Склады Иваново' : 'Склады по городам'} columns={columns} rows={rows} empty="Склады по этому запросу не найдены"/>
+        <Table
+          label={isMaster ? 'Склады Иваново' : 'Склады по городам'}
+          columns={columns}
+          rows={rows}
+          rowHref={w => '/stock/' + w.id}
+          empty="Склады по этому запросу не найдены"
+        />
       </Card>
       <Card title="Внутренние запасы · Иваново">
         <Wip rows={internal} links/>
@@ -235,13 +238,15 @@ export function CentralStock({tab = 'inventory'}) {
       title={tab === 'access' ? 'Доступ к складам' : 'Склады'}
       subtitle={tab === 'access' ? 'Именные учётные записи сотрудников' : 'Остатки и операции по площадкам · ' + dayText(today)}
       actions={
-        tab === 'transfers'
-          ? <Button kind="primary" to="/stock/transfers/new">Новое перемещение</Button>
-          : tab === 'sales' && roleCanWrite(user)
-            ? <Button kind="primary" to="/sales/new?warehouse=5">Новая продажа</Button>
-            : tab === 'access'
-              ? <Button kind="primary" onClick={() => setGrant(true)}>Назначить доступ</Button>
-              : null
+        tab === 'inventory' && user.role === 'admin'
+          ? <Button kind="primary" onClick={() => setAdd(true)}>Добавить склад</Button>
+          : tab === 'transfers'
+            ? <Button kind="primary" to="/stock/transfers/new">Новое перемещение</Button>
+            : tab === 'sales' && roleCanWrite(user)
+              ? <Button kind="primary" to="/sales/new?warehouse=5">Новая продажа</Button>
+              : tab === 'access'
+                ? <Button kind="primary" onClick={() => setGrant(true)}>Назначить доступ</Button>
+                : null
       }
     >
       {tabs.length > 1 && (
@@ -347,36 +352,35 @@ export function WarehouseDetail({id, regional = false}) {
             }
           >
             {regional && (
-              <Card className="kpi-grid cols-4">
-                <div className="kpi-item">
-                  <span className="kpi-label">Позиций в наличии</span>
-                  <strong className="kpi-value">{number(inStockPositions)}</strong>
-                  <small className="kpi-meta">Всего в ассортименте: {number(d.rows.length)}</small>
-                </div>
-                <div className="kpi-item">
-                  <span className="kpi-label">Остаток на складе</span>
-                  <strong className="kpi-value">{qty(total(d.rows, 'quantity'))} компл.</strong>
-                  <small className="kpi-meta">{w.city}</small>
-                </div>
-                <div className="kpi-item">
-                  <span className="kpi-label">Оценка по прайсу</span>
-                  <strong className="kpi-value">{money(retailStockTotal)}</strong>
-                  <small className="kpi-meta">В розничных ценах</small>
-                </div>
-                <div className="kpi-item">
-                  <span className="kpi-label">Приёмка отправок</span>
-                  <strong className="kpi-value">
-                    {transitDocs > 0
-                      ? <a className="neutral-link" href={href(routeWith('/receiving', {status: 'in_transit'}))}>{number(transitDocs)} в пути</a>
-                      : '0 в пути'}
-                  </strong>
-                  <small className="kpi-meta">
-                    {transitDocs > 0
-                      ? <a href={href(routeWith('/receiving', {status: 'in_transit'}))}>Перейти к приёмке</a>
-                      : 'Ожидающих отправок нет'}
-                  </small>
-                </div>
-              </Card>
+              <MetricStrip
+                items={[
+                  {
+                    key: 'in-stock',
+                    label: 'В наличии',
+                    value: number(inStockPositions) + ' поз.',
+                    meta: 'Всего: ' + number(d.rows.length)
+                  },
+                  {
+                    key: 'qty',
+                    label: 'Остаток на складе',
+                    value: qty(total(d.rows, 'quantity')) + ' компл.',
+                    meta: w.city
+                  },
+                  {
+                    key: 'retail',
+                    label: 'Оценка по прайсу',
+                    value: money(retailStockTotal),
+                    meta: 'В розничных ценах'
+                  },
+                  {
+                    key: 'transit',
+                    label: 'Приёмка',
+                    value: number(transitDocs) + ' в пути',
+                    meta: transitDocs > 0 ? 'Перейти к приёмке' : 'Ожидающих нет',
+                    to: transitDocs > 0 ? routeWith('/receiving', {status: 'in_transit'}) : undefined
+                  }
+                ]}
+              />
             )}
             <Card>
               <Tabs value={selected} onChange={value => selection.change('tab', value)} items={tabs}/>
@@ -390,6 +394,7 @@ export function WarehouseDetail({id, regional = false}) {
                   <Table
                     label="Текущие остатки"
                     rows={rows.slice((stock.page - 1) * pageSize, stock.page * pageSize)}
+                    rowHref={isRaw ? (r => '/stock/1/items/' + r.item_id) : undefined}
                     hasPager={rows.length > 0}
                     footer={footer}
                     empty={stock.filters.search ? 'Товары не найдены' : 'На этом складе пока нет остатков'}
@@ -431,10 +436,14 @@ function StockHistory({id, items, material}) {
   const query = {...options, ...(material ? {item: material} : {})}
   const moves = useRemote(path, {...query, limit: pageSize, offset: (page - 1) * pageSize})
 
+  function moveUrl(row) {
+    if (row.kind === 'opening' || (user.role === 'master' && row.kind !== 'report')) return null
+    return regional ? (row.kind === 'transfer' ? '/receiving/' : '/sales/') + row.doc_id : documentPath(row)
+  }
+
   function moveLink(row) {
-    if (row.kind === 'opening' || (user.role === 'master' && row.kind !== 'report')) return row.code
-    const url = regional ? (row.kind === 'transfer' ? '/receiving/' : '/sales/') + row.doc_id : documentPath(row)
-    return <a href={href(url)}>{row.code}</a>
+    const url = moveUrl(row)
+    return url ? <a href={href(url)}>{row.code}</a> : row.code
   }
 
   return (
@@ -463,13 +472,14 @@ function StockHistory({id, items, material}) {
             <Table
               label={material ? 'Движения материала' : 'История движений'}
               rows={m.rows}
+              rowHref={moveUrl}
               hasPager={m.total > 0}
               empty="Движений за выбранный период не найдено"
               columns={[
                 {label: 'Дата и время', cell: r => nowrap(dateTime(r.happened_at))},
                 {label: 'Документ', primary: true, cell: moveLink},
                 {label: 'Операция', cell: r => movementName[r.operation] || r.operation},
-                ...(!material ? [{label: 'Товар', cell: itemText}] : []),
+                ...(!material ? [{label: 'Товар', mobileFull: true, cell: itemText}] : []),
                 {
                   label: 'Приход',
                   align: 'right',
@@ -539,17 +549,19 @@ function DocumentTable({kind, regional, page, size = 15, setPage, setSize, optio
   const path = '/documents/' + kind
   const ownRequest = useRemote(externalRequest ? null : path, {...options, limit: size, offset: (page - 1) * size})
   const request = externalRequest || ownRequest
+  const docUrl = r => regional ? (kind === 'sale' ? '/sales/' : '/receiving/') + r.id : documentPath(r)
 
   const columns = [
     {
       label: 'Документ',
       primary: true,
-      cell: r => nowrap(<a href={href(regional ? (kind === 'sale' ? '/sales/' : '/receiving/') + r.id : documentPath(r))}>{r.code}</a>)
+      cell: r => nowrap(<a href={href(docUrl(r))}>{r.code}</a>)
     },
     {label: 'Дата', cell: r => nowrap(kind === 'sale' ? dateTime(r.created_at) : dayText(r.date))},
     ...(kind === 'transfer'
       ? [{
           label: regional ? 'Отправитель' : 'Склад-получатель',
+          mobileFull: true,
           cell: r => regional ? r.source_name + ' · ' + r.source_city : r.target_name + ' · ' + r.target_city
         }]
       : kind === 'sale' && !regional
@@ -558,6 +570,7 @@ function DocumentTable({kind, regional, page, size = 15, setPage, setSize, optio
     ...(kind === 'receipt'
       ? [{
           label: 'Поставщик',
+          mobileFull: true,
           cell: r => (
             <>
               <div>{r.supplier}</div>
@@ -591,6 +604,7 @@ function DocumentTable({kind, regional, page, size = 15, setPage, setSize, optio
           <Table
             columns={columns}
             rows={d.rows}
+            rowHref={docUrl}
             hasPager={d.total > 0}
             label="Журнал документов"
             empty="Документы по этому запросу не найдены"
@@ -708,33 +722,34 @@ function SalesOverview({regional = false}) {
             const cityTotal = total(d.cities || [], 'total')
             return (
               <>
-                <div
-                  className={'kpi-grid ' + (regional ? 'cols-3' : 'cols-4')}
-                  style={{border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface-subtle)'}}
-                >
-                  <div className="kpi-item">
-                    <span className="kpi-label">Сумма продаж</span>
-                    <strong className="kpi-value">{money(d.total)}</strong>
-                    <small className="kpi-meta">Средний чек: {d.documents ? money(avgCheck) : '—'}</small>
-                  </div>
-                  <div className="kpi-item">
-                    <span className="kpi-label">Продано комплектов</span>
-                    <strong className="kpi-value">{qty(d.quantity)}</strong>
-                    <small className="kpi-meta">{regional ? 'Розничная реализация' : 'По всем выбранным складам'}</small>
-                  </div>
-                  <div className="kpi-item">
-                    <span className="kpi-label">Документов</span>
-                    <strong className="kpi-value">{number(d.documents)}</strong>
-                    <small className="kpi-meta">Проведённые продажи</small>
-                  </div>
-                  {!regional && (
-                    <div className="kpi-item">
-                      <span className="kpi-label">Учётная стоимость</span>
-                      <strong className="kpi-value">{money(d.cost)}</strong>
-                      <small className="kpi-meta">Валовая разница: {money((d.total || 0) - (d.cost || 0))}</small>
-                    </div>
-                  )}
-                </div>
+                <MetricStrip
+                  items={[
+                    {
+                      key: 'total',
+                      label: 'Сумма продаж',
+                      value: money(d.total),
+                      meta: 'Ср. чек: ' + (d.documents ? money(avgCheck) : '—')
+                    },
+                    {
+                      key: 'qty',
+                      label: 'Продано',
+                      value: qty(d.quantity) + ' компл.',
+                      meta: regional ? 'Розничная реализация' : 'По выбранным складам'
+                    },
+                    {
+                      key: 'docs',
+                      label: 'Документов',
+                      value: number(d.documents),
+                      meta: 'Проведённые продажи'
+                    },
+                    ...(!regional ? [{
+                      key: 'cost',
+                      label: 'Учётная стоимость',
+                      value: money(d.cost),
+                      meta: 'Разница: ' + money((d.total || 0) - (d.cost || 0))
+                    }] : [])
+                  ]}
+                />
 
                 {(payRows.length > 0 || (!regional && d.cities.length > 0) || (regional && topItems.length > 0)) && (
                   <div className="grid-two">
@@ -782,6 +797,7 @@ function SalesOverview({regional = false}) {
                   <Table
                     label="Сводка продаж по городам"
                     rows={d.cities}
+                    rowHref={r => '/stock/' + r.id}
                     footer={
                       <tr>
                         <td colSpan={2}><strong>Итого ({number(d.cities.length)} склад.)</strong></td>
@@ -1063,16 +1079,27 @@ function TransactionLines({lines, setLines, items, mode, onAddMaterial}) {
               />
             </Field>
             <Field label={'Количество' + (item ? ', ' + item.unit : '')}>
-              <input
-                required
-                type="number"
-                inputMode={decimal ? 'decimal' : 'numeric'}
-                min={decimal ? '.001' : '1'}
-                step={decimal ? '.001' : '1'}
-                max={stocked && item ? Math.max(1, item.quantity / 1000) : 100000}
-                value={l.quantity}
-                onChange={e => setLine(l.key, {quantity: e.target.value})}
-              />
+              {decimal ? (
+                <input
+                  required
+                  type="number"
+                  inputMode="decimal"
+                  min=".001"
+                  step=".001"
+                  max={stocked && item ? Math.max(1, item.quantity / 1000) : 100000}
+                  value={l.quantity}
+                  onChange={e => setLine(l.key, {quantity: e.target.value})}
+                />
+              ) : (
+                <Stepper
+                  required
+                  min={1}
+                  max={stocked && item ? Math.max(1, Math.floor(item.quantity / 1000)) : 100000}
+                  step={1}
+                  value={l.quantity}
+                  onChange={val => setLine(l.key, {quantity: val})}
+                />
+              )}
             </Field>
             <Field label={sale ? 'Цена за комплект, ₽' : mode === 'transfer' ? 'Цена строки за ед., ₽' : 'Стоимость за ед., ₽'}>
               <input
@@ -1120,6 +1147,7 @@ function payloadLines(lines) {
 function TransactionEditor({mode, document, inventory, initialSaleWarehouse}) {
   const ws = useWorkspace()
   const toast = useToast()
+  const formId = useId()
   const receipt = mode === 'receipt', sale = mode === 'sale'
   const isRegional = ws.user.role === 'regional'
   const saleWarehouses = ws.warehouses.filter(w => ['finished', 'regional'].includes(w.kind))
@@ -1231,6 +1259,7 @@ function TransactionEditor({mode, document, inventory, initialSaleWarehouse}) {
     >
       <Card title={sale ? 'Товар и оплата' : receipt ? 'Поступление от поставщика' : 'Маршрут и товары'}>
         <form
+          id={formId}
           className="document-form"
           onSubmit={e => {
             e.preventDefault()
@@ -1391,6 +1420,40 @@ function TransactionEditor({mode, document, inventory, initialSaleWarehouse}) {
         </form>
       </Card>
 
+      <div className="mobile-sticky-bar">
+        <div className="mobile-sticky-summary">
+          <span>{sale ? 'К оплате' : 'Всего'}</span>
+          <strong>{money(totalValue)}</strong>
+        </div>
+        <div className="mobile-sticky-actions">
+          {receipt && (
+            <Button type="submit" form={formId} value="draft" kind="secondary" disabled={state.busy}>
+              Черновик
+            </Button>
+          )}
+          {document && !receipt && (
+            <Button type="submit" form={formId} kind="secondary" disabled={state.busy}>
+              Сохранить
+            </Button>
+          )}
+          <Button
+            type="submit"
+            form={formId}
+            value={document && !receipt ? 'send' : undefined}
+            kind="primary"
+            disabled={state.busy || hasOverdraw || (sale && (!saleInventory.data || items.filter(i => i.quantity > 0).length === 0))}
+          >
+            {sale
+              ? 'Проверить продажу'
+              : receipt
+                ? 'Принять на склад'
+                : document
+                  ? 'Отправить'
+                  : 'Сохранить'}
+          </Button>
+        </div>
+      </div>
+
       {newMaterialOpen && (
         <NewMaterialDialog close={() => setNewMaterialOpen(false)} done={handleMaterialCreated}/>
       )}
@@ -1412,37 +1475,13 @@ function TransactionEditor({mode, document, inventory, initialSaleWarehouse}) {
   )
 }
 
-function ReceiveAction({document, refresh}) {
-  const ws = useWorkspace()
-  const toast = useToast()
-  const [confirm, set] = useState(false)
-
-  return (
-    <>
-      <Button kind="primary" onClick={() => set(true)}>Подтвердить получение</Button>
-      {confirm && (
-        <Confirm
-          title="Подтвердить получение?"
-          submit="Подтвердить получение"
-          text="Проверьте фактическое количество каждой позиции. Подтверждение зачислит комплекты на ваш склад."
-          close={() => set(false)}
-          action={async () => {
-            await api('/transfers/' + document.id + '/receive', 'POST')
-            ws.refresh()
-            toast.success('Приёмка ' + document.code + ' подтверждена')
-            refresh()
-            set(false)
-          }}
-        />
-      )}
-    </>
-  )
-}
-
 function DocumentView({d}) {
   const ws = useWorkspace()
+  const toast = useToast()
+  const [receiveConfirm, setReceiveConfirm] = useState(false)
   const regional = ws.user.role === 'regional'
   const sale = d.kind === 'sale', transfer = d.kind === 'transfer', receipt = d.kind === 'receipt'
+  const canReceive = regional && transfer && d.status === 'in_transit'
   const showBookValue = transfer && !regional && d.status !== 'draft'
   const title = (sale ? 'Продажа' : transfer ? (regional ? 'Приёмка' : 'Перемещение') : 'Поступление сырья') + ' ' + d.code
   const back = sale
@@ -1450,7 +1489,7 @@ function DocumentView({d}) {
     : transfer
       ? (regional ? '/receiving' : '/stock/transfers')
       : '/stock/' + (d.target_id || 1)
-  const at = useRemote(regional && transfer && d.status === 'in_transit' ? '/warehouses/' + ws.user.warehouse_id : null)
+  const at = useRemote(canReceive ? '/warehouses/' + ws.user.warehouse_id : null)
 
   const details = sale
     ? [
@@ -1517,16 +1556,42 @@ function DocumentView({d}) {
         )}
         {sale && <Details values={details}/>}
         {d.memo && <p className="inline-note">{sale ? <><strong>Комментарий:</strong> {d.memo}</> : d.memo}</p>}
-        {regional && transfer && d.status === 'in_transit' && (
+        {canReceive && (
           <p className="inline-note info">Сверьте количество каждой позиции перед подтверждением приёмки.</p>
         )}
         <ActionRow>
           <Button to={back} className="push-left">Назад</Button>
           {sale && <Button onClick={() => window.print()}>Распечатать</Button>}
-          {regional && transfer && d.status === 'in_transit' && <ReceiveAction document={d} refresh={ws.refreshPage}/>}
+          {canReceive && <Button kind="primary" onClick={() => setReceiveConfirm(true)}>Подтвердить получение</Button>}
         </ActionRow>
       </Card>
       <DocumentHistory document={d} hideCost={regional}/>
+      {canReceive && (
+        <div className="mobile-sticky-bar">
+          <div className="mobile-sticky-summary">
+            <span>К приёмке · {qty(d.quantity)} компл.</span>
+            <strong>{money(d.total)}</strong>
+          </div>
+          <div className="mobile-sticky-actions">
+            <Button kind="primary" onClick={() => setReceiveConfirm(true)}>Подтвердить получение</Button>
+          </div>
+        </div>
+      )}
+      {receiveConfirm && (
+        <Confirm
+          title="Подтвердить получение?"
+          submit="Подтвердить получение"
+          text="Проверьте фактическое количество каждой позиции. Подтверждение зачислит комплекты на ваш склад."
+          close={() => setReceiveConfirm(false)}
+          action={async () => {
+            await api('/transfers/' + d.id + '/receive', 'POST')
+            ws.refresh()
+            toast.success('Приёмка ' + d.code + ' подтверждена')
+            ws.refreshPage()
+            setReceiveConfirm(false)
+          }}
+        />
+      )}
     </Page>
   )
 }
