@@ -1,8 +1,8 @@
 import React, { useId, useState } from 'react'
 import {
   ActionRow, Button, Card, Confirm, DateControl, DateRange, Dialog, Download, EmptyState,
-  ErrorBox, Field, FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Select, Status,
-  Stepper, Table, Tabs, api, dayText, go, href, itemText, money, monthText, number, qty,
+  ErrorBox, Field, FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Section, Select,
+  Status, Stepper, Table, Tabs, api, dayText, go, href, itemText, money, monthText, number, qty,
   roleCanWrite, routeWith, shifts, stages, statuses, timeText, useAction, useFilters, useRemote,
   useSearchOptions, useToast, useWorkspace
 } from './ui'
@@ -157,7 +157,7 @@ function OutputChart({ data }) {
             <strong className="nowrap">
               {qty(n)} компл.
               {draftN > 0 && (
-                <span className="cell-secondary">+{qty(draftN)} черн.</span>
+                <span className="cell-secondary">+{qty(draftN)} в черновиках</span>
               )}
             </strong>
           </div>
@@ -222,7 +222,10 @@ export function Overview() {
   return (
     <Page
       title="Обзор производства"
-      subtitle={
+      subtitle="Фактические результаты смены"
+      actions={<Button kind="primary" to={newReportTarget}>Новый отчёт за смену</Button>}
+    >
+      <div className="overview-date-bar">
         <span className="day-stepper" role="group" aria-label="Выбор даты обзора">
           <button
             type="button"
@@ -253,9 +256,7 @@ export function Overview() {
             ›
           </button>
         </span>
-      }
-      actions={<Button kind="primary" to={newReportTarget}>Новый отчёт за смену</Button>}
-    >
+      </div>
       <Guard request={request} skeleton="overview">
         {data => {
           const dayReports = data.day_reports ?? data.reports ?? []
@@ -284,7 +285,7 @@ export function Overview() {
                   </Button>
                 </div>
               )}
-              <Card
+              <Section
                 title="Отчёты за смену"
                 subtitle={
                   dayReports.length > 0
@@ -293,8 +294,8 @@ export function Overview() {
                     : undefined
                 }
                 actions={
-                  <Button to={routeWith('/reports', { start: day, end: day })}>
-                    Отчёты за выбранный день
+                  <Button kind="ghost" size="small" to={routeWith('/reports', { start: day, end: day })}>
+                    Все за день
                   </Button>
                 }
               >
@@ -305,45 +306,49 @@ export function Overview() {
                   label="Отчёты за смену"
                   empty="За выбранную дату отчётов нет"
                 />
-              </Card>
+              </Section>
               <div className="grid-two overview-bottom">
-                <Card
+                <Section
                   title={'Незавершённое производство · ' + qty(sum(data.wip, 'quantity')) + ' компл.'}
                   subtitle={'Остаток на ' + dayText(day)}
-                  actions={<Button size="small" to="/stock">Открыть склады</Button>}
+                  actions={<Button kind="ghost" size="small" to="/stock">Открыть склады</Button>}
                 >
-                  <Wip rows={data.wip} links showStack />
-                </Card>
-                <Card
+                  <div className="surface-panel">
+                    <Wip rows={data.wip} links showStack />
+                  </div>
+                </Section>
+                <Section
                   title="Требует внимания"
                   actions={
                     data.pending.total > 0 ? (
-                      <Button size="small" to={routeWith('/reports', { status: 'draft' })}>
+                      <Button kind="ghost" size="small" to={routeWith('/reports', { status: 'draft' })}>
                         Все черновики
                       </Button>
                     ) : null
                   }
                 >
-                  {data.pending.total ? (
-                    <>
-                      <strong>Черновиков отчётов: {number(data.pending.total)}</strong>
-                      <ul className="attention">
-                        {data.pending.rows.map(r => (
-                          <li key={r.id}>
-                            <a href={href('/reports/' + r.id)}>
-                              {stages[r.stage]} · {r.code}
-                            </a>{' '}
-                            <span className="muted">
-                              ({dayText(r.date)}{r.quantity ? ' · ' + qty(r.quantity) + ' компл.' : ''})
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </>
-                  ) : (
-                    <p className="muted">Все отчёты проведены — черновиков нет.</p>
-                  )}
-                </Card>
+                  <div className="surface-panel">
+                    {data.pending.total ? (
+                      <>
+                        <strong>Черновиков отчётов: {number(data.pending.total)}</strong>
+                        <ul className="attention">
+                          {data.pending.rows.map(r => (
+                            <li key={r.id}>
+                              <a href={href('/reports/' + r.id)}>
+                                {stages[r.stage]} · {r.code}
+                              </a>{' '}
+                              <span className="muted">
+                                ({dayText(r.date)}{r.quantity ? ' · ' + qty(r.quantity) + ' компл.' : ''})
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : (
+                      <p className="muted">Все отчёты проведены — черновиков нет.</p>
+                    )}
+                  </div>
+                </Section>
               </div>
             </>
           )
@@ -366,84 +371,82 @@ export function ReportList() {
       subtitle="Выпуск, материалы и начисления в одном документе"
       actions={<Button kind="primary" to="/reports/new">Новый отчёт</Button>}
     >
-      <Card>
-        <RegistryTools
-          state={state}
-          placeholder="Документ, изделие или автор"
-          total={request.data?.total}
-        >
-          <DateRange
-            filters={filters}
-            change={change}
-            onRangeChange={(start, end) => update({ start, end })}
+      <RegistryTools
+        state={state}
+        placeholder="Документ, изделие или автор"
+        total={request.data?.total}
+      >
+        <DateRange
+          filters={filters}
+          change={change}
+          onRangeChange={(start, end) => update({ start, end })}
+        />
+        <Field label="Этап">
+          <Select
+            placeholder="Все этапы"
+            entries={production}
+            value={filters.stage}
+            onChange={e => change('stage', e.target.value)}
           />
-          <Field label="Этап">
-            <Select
-              placeholder="Все этапы"
-              entries={production}
-              value={filters.stage}
-              onChange={e => change('stage', e.target.value)}
+        </Field>
+        <Field label="Статус">
+          <Select
+            placeholder="Все статусы"
+            entries={[
+              ['draft', 'Черновик'],
+              ['posted', 'Проведён'],
+              ['corrected', 'Исправлен']
+            ]}
+            value={filters.status}
+            onChange={e => change('status', e.target.value)}
+          />
+        </Field>
+      </RegistryTools>
+      <Guard request={pending ? {} : request}>
+        {d => (
+          <>
+            <Table
+              columns={shiftReportColumns()}
+              rows={d.rows}
+              rowHref={r => '/reports/' + r.id}
+              label="Реестр отчётов"
+              hasPager={Boolean(d.total)}
+              empty={
+                <EmptyState
+                  title="Отчёты по этому запросу не найдены"
+                  description={
+                    filters.search || hasFilters
+                      ? 'Попробуйте изменить поисковый запрос или сбросить фильтры.'
+                      : 'Создайте первый отчёт за смену.'
+                  }
+                  action={
+                    hasFilters ? (
+                      <Button size="small" onClick={reset}>Сбросить фильтры</Button>
+                    ) : (
+                      <Button kind="primary" size="small" to="/reports/new">Новый отчёт</Button>
+                    )
+                  }
+                />
+              }
             />
-          </Field>
-          <Field label="Статус">
-            <Select
-              placeholder="Все статусы"
-              entries={[
-                ['draft', 'Черновик'],
-                ['posted', 'Проведён'],
-                ['corrected', 'Исправлен']
-              ]}
-              value={filters.status}
-              onChange={e => change('status', e.target.value)}
+            <Pager
+              page={page}
+              size={pageSize}
+              total={d.total}
+              change={setPage}
+              onSizeChange={s => {
+                setPageSize(s)
+                setPage(1)
+              }}
             />
-          </Field>
-        </RegistryTools>
-        <Guard request={pending ? {} : request}>
-          {d => (
-            <>
-              <Table
-                columns={shiftReportColumns()}
-                rows={d.rows}
-                rowHref={r => '/reports/' + r.id}
-                label="Реестр отчётов"
-                hasPager={Boolean(d.total)}
-                empty={
-                  <EmptyState
-                    title="Отчёты по этому запросу не найдены"
-                    description={
-                      filters.search || hasFilters
-                        ? 'Попробуйте изменить поисковый запрос или сбросить фильтры.'
-                        : 'Создайте первый отчёт за смену.'
-                    }
-                    action={
-                      hasFilters ? (
-                        <Button size="small" onClick={reset}>Сбросить фильтры</Button>
-                      ) : (
-                        <Button kind="primary" size="small" to="/reports/new">Новый отчёт</Button>
-                      )
-                    }
-                  />
-                }
-              />
-              <Pager
-                page={page}
-                size={pageSize}
-                total={d.total}
-                change={setPage}
-                onSizeChange={s => {
-                  setPageSize(s)
-                  setPage(1)
-                }}
-              />
-              {d.total > 0 && (
-                <ActionRow>
-                  <Download path="/documents/report" options={options} />
-                </ActionRow>
-              )}
-            </>
-          )}
-        </Guard>
-      </Card>
+            {d.total > 0 && (
+              <ActionRow>
+                <Download path="/documents/report" options={options} />
+              </ActionRow>
+            )}
+          </>
+        )}
+      </Guard>
     </Page>
   )
 }
@@ -821,10 +824,10 @@ export function DocumentHistory({ document, hideCost, defaultOpen = false }) {
   }
 
   return (
-    <Card
+    <Section
       title="История документа"
       actions={
-        <Button aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Button kind="ghost" size="small" aria-expanded={open} onClick={() => setOpen(!open)}>
           {open ? 'Свернуть' : 'Развернуть'}
         </Button>
       }
@@ -847,14 +850,13 @@ export function DocumentHistory({ document, hideCost, defaultOpen = false }) {
             ]}
           />
           {document.movements?.length > 0 && (
-            <div className="history-movements">
-              <h3>Движение запасов</h3>
+            <Section title="Движение запасов">
               <Table label="Движение запасов" rows={document.movements} columns={movementColumns} />
-            </div>
+            </Section>
           )}
         </>
       )}
-    </Card>
+    </Section>
   )
 }
 
@@ -1063,167 +1065,168 @@ function ReportEditor({ document }) {
 
       <DocumentRelationBanner document={document} />
 
-      <Card className="report-card">
-        {editable && (
-          <>
-            <div className="toolbar report-fields">
-              <Field label="Дата">
-                <DateControl
-                  required
-                  disabled={!editable}
-                  max={ws.today}
-                  min={minDate}
-                  value={report.date}
-                  onChange={e => {
-                    if (!e.target.value) return
-                    const nextDate = e.target.value
-                    const nextLines = report.lines.map(l => ({
-                      ...l,
-                      assignments: l.assignments.filter(a => {
-                        const worker = ws.staff.find(w => w.id === a.staff_id)
-                        return !worker || worker.hired_on <= nextDate
-                      })
-                    }))
-                    change({ ...report, date: nextDate, lines: nextLines }, tab !== 'work')
-                  }}
-                />
-              </Field>
-              <Field label="Этап">
-                <Select
-                  disabled={!editable}
-                  entries={production}
-                  value={report.stage}
-                  onChange={e => {
-                    change(
-                      {
-                        ...report,
-                        stage: e.target.value,
-                        lines: report.lines.map(l => ({ ...l, prepared: 0, assignments: [] }))
-                      },
-                      tab !== 'work'
-                    )
-                  }}
-                />
-              </Field>
-              <Field label="Смена">
-                <Select
-                  disabled={!editable}
-                  entries={Object.entries(shifts)}
-                  value={report.shift}
-                  onChange={e => change({ ...report, shift: e.target.value })}
-                />
-              </Field>
-              <Field label="Склад списания сырья">
-                <Select
-                  disabled={!editable}
-                  entries={sourceWarehouses.map(w => [String(w.id), warehouseLabel(w.name, w.city)])}
-                  value={String(report.source_id || 1)}
-                  onChange={e => change({ ...report, source_id: Number(e.target.value) || 1 }, tab !== 'work')}
-                />
-              </Field>
-            </div>
-            {dateBelowOpenMonth && (
-              <div className="notice warning">
-                Дата отчёта раньше открытого периода ({monthText(ws.settings.open_month)}). Выберите дату начиная с{' '}
-                {dayText(minDate)}.
-              </div>
-            )}
-          </>
-        )}
-
-        <Tabs items={tabList} value={tab} onChange={selectTab} label="Содержимое отчёта" />
-
-        {tab === 'work' && (
-          <>
-            <Table
-              label="Выработка"
-              rows={products}
-              rowKey={r => r.item_id}
-              empty="Добавьте хотя бы одно изделие из журнала выработки"
-              columns={[
-                { label: 'Изделие', width: '30%', primary: true, cell: r => r.item.name },
-                { label: 'Размер', width: '14%', cell: r => r.item.size || '—' },
-                {
-                  label: 'Количество, компл.',
-                  width: '16%',
-                  align: 'right',
-                  cell: r => number(r.quantity)
-                },
-                ...(report.stage === 'pack'
-                  ? [
-                      {
-                        label: 'Передано с пошива',
-                        width: '16%',
-                        align: 'right',
-                        cell: r => number(r.prepared) + ' компл.'
-                      }
-                    ]
-                  : []),
-                {
-                  label: 'Спецификация',
-                  width: '18%',
-                  align: 'after-number',
-                  cell: r => {
-                    const saved = computed?.lines?.find(l => l.item_id === r.item_id)
-                    const v = saved?.version || r.item.version
-                    return (
-                      <a
-                        className="neutral-link"
-                        href={href('/catalog/' + r.item_id + (saved?.spec_id ? '/specs/' + saved.spec_id : ''))}
-                      >
-                        {v ? 'Версия ' + v : 'Спецификация'}
-                      </a>
-                    )
-                  }
-                },
-                ...(editable
-                  ? [
-                      {
-                        label: 'Действия',
-                        width: '12%',
-                        align: 'right',
-                        cell: (r, i) => (
-                          <Button kind="ghost" onClick={() => setEdit({ kind: 'line', index: i })}>
-                            Изменить
-                          </Button>
-                        )
-                      }
-                    ]
-                  : [])
-              ]}
-              footer={
-                products.length > 0 ? (
-                  <tr>
-                    <th scope="row" colSpan={2}>Итого выработка</th>
-                    <td className="right" data-label="Выработка"><strong>{number(totalOutput)} компл.</strong></td>
-                    {report.stage === 'pack' && (
-                      <td className="right" data-label="Передано с пошива">
-                        {number(products.reduce((s, l) => s + (l.prepared || 0), 0))} компл.
-                      </td>
-                    )}
-                    <td colSpan={editable ? 2 : 1} />
-                  </tr>
-                ) : null
-              }
-            />
-            {editable && (
-              <div className="report-totals work-totals">
-                <Button onClick={() => setEdit({ kind: 'line', index: -1 })}>Добавить изделие</Button>
-              </div>
-            )}
-          </>
-        )}
-
-        {tab === 'materials' && (
-          <>
-            <ErrorBox error={previewAction.error} />
-            {computed ? (
-              <MaterialRows
-                document={computed}
-                sourceId={activeSourceId}
-                sourceLabel={activeSourceLabel}
+      {editable && (
+        <div className="surface-panel">
+          <div className="toolbar report-fields">
+            <Field label="Дата">
+              <DateControl
+                required
+                disabled={!editable}
+                max={ws.today}
+                min={minDate}
+                value={report.date}
+                onChange={e => {
+                  if (!e.target.value) return
+                  const nextDate = e.target.value
+                  const nextLines = report.lines.map(l => ({
+                    ...l,
+                    assignments: l.assignments.filter(a => {
+                      const worker = ws.staff.find(w => w.id === a.staff_id)
+                      return !worker || worker.hired_on <= nextDate
+                    })
+                  }))
+                  change({ ...report, date: nextDate, lines: nextLines }, tab !== 'work')
+                }}
               />
-            ) : (
+            </Field>
+            <Field label="Этап">
+              <Select
+                disabled={!editable}
+                entries={production}
+                value={report.stage}
+                onChange={e => {
+                  change(
+                    {
+                      ...report,
+                      stage: e.target.value,
+                      lines: report.lines.map(l => ({ ...l, prepared: 0, assignments: [] }))
+                    },
+                    tab !== 'work'
+                  )
+                }}
+              />
+            </Field>
+            <Field label="Смена">
+              <Select
+                disabled={!editable}
+                entries={Object.entries(shifts)}
+                value={report.shift}
+                onChange={e => change({ ...report, shift: e.target.value })}
+              />
+            </Field>
+            <Field label="Склад списания сырья">
+              <Select
+                disabled={!editable}
+                entries={sourceWarehouses.map(w => [String(w.id), warehouseLabel(w.name, w.city)])}
+                value={String(report.source_id || 1)}
+                onChange={e => change({ ...report, source_id: Number(e.target.value) || 1 }, tab !== 'work')}
+              />
+            </Field>
+          </div>
+        </div>
+      )}
+
+      {dateBelowOpenMonth && (
+        <div className="notice warning">
+          Дата отчёта раньше открытого периода ({monthText(ws.settings.open_month)}). Выберите дату начиная с{' '}
+          {dayText(minDate)}.
+        </div>
+      )}
+
+      <Tabs items={tabList} value={tab} onChange={selectTab} label="Содержимое отчёта" />
+
+      {tab === 'work' && (
+        <>
+          <Table
+            label="Выработка"
+            rows={products}
+            rowKey={r => r.item_id}
+            empty="Добавьте хотя бы одно изделие из журнала выработки"
+            columns={[
+              { label: 'Изделие', width: '30%', primary: true, cell: r => r.item.name },
+              { label: 'Размер', width: '14%', cell: r => r.item.size || '—' },
+              {
+                label: 'Количество, компл.',
+                width: '16%',
+                align: 'right',
+                cell: r => number(r.quantity)
+              },
+              ...(report.stage === 'pack'
+                ? [
+                    {
+                      label: 'Передано с пошива',
+                      width: '16%',
+                      align: 'right',
+                      cell: r => number(r.prepared) + ' компл.'
+                    }
+                  ]
+                : []),
+              {
+                label: 'Спецификация',
+                width: '18%',
+                align: 'after-number',
+                cell: r => {
+                  const saved = computed?.lines?.find(l => l.item_id === r.item_id)
+                  const v = saved?.version || r.item.version
+                  return (
+                    <a
+                      className="neutral-link"
+                      href={href('/catalog/' + r.item_id + (saved?.spec_id ? '/specs/' + saved.spec_id : ''))}
+                    >
+                      {v ? 'Версия ' + v : 'Спецификация'}
+                    </a>
+                  )
+                }
+              },
+              ...(editable
+                ? [
+                    {
+                      label: 'Действия',
+                      width: '12%',
+                      align: 'right',
+                      cell: (r, i) => (
+                        <Button kind="ghost" onClick={() => setEdit({ kind: 'line', index: i })}>
+                          Изменить
+                        </Button>
+                      )
+                    }
+                  ]
+                : [])
+            ]}
+            footer={
+              products.length > 0 ? (
+                <tr>
+                  <th scope="row" colSpan={2}>Итого выработка</th>
+                  <td className="right" data-label="Выработка"><strong>{number(totalOutput)} компл.</strong></td>
+                  {report.stage === 'pack' && (
+                    <td className="right" data-label="Передано с пошива">
+                      {number(products.reduce((s, l) => s + (l.prepared || 0), 0))} компл.
+                    </td>
+                  )}
+                  <td colSpan={editable ? 2 : 1} />
+                </tr>
+              ) : null
+            }
+          />
+          {editable && (
+            <div className="left-actions">
+              <Button onClick={() => setEdit({ kind: 'line', index: -1 })}>Добавить изделие</Button>
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === 'materials' && (
+        <>
+          <ErrorBox error={previewAction.error} />
+          {computed ? (
+            <MaterialRows
+              document={computed}
+              sourceId={activeSourceId}
+              sourceLabel={activeSourceLabel}
+            />
+          ) : (
+            <div className="surface-panel">
               <EmptyState
                 title={previewAction.busy ? 'Расчёт материалов…' : 'Нет выработки для расчёта'}
                 description={
@@ -1232,14 +1235,16 @@ function ReportEditor({ document }) {
                     : 'Добавьте изделия на вкладке «Выработка», чтобы увидеть потребность в сырье.'
                 }
               />
-            )}
-          </>
-        )}
+            </div>
+          )}
+        </>
+      )}
 
-        {tab === 'wages' && (
-          <>
-            <ErrorBox error={previewAction.error} />
-            {editable && products.length > 0 && (
+      {tab === 'wages' && (
+        <>
+          <ErrorBox error={previewAction.error} />
+          {editable && products.length > 0 && (
+            <div className="surface-panel">
               <div className="assignment-progress" aria-label="Распределение выработки по изделиям">
                 {products.map((l, idx) => {
                   const allocated = l.assignments.reduce((s, a) => s + a.quantity, 0)
@@ -1279,156 +1284,143 @@ function ReportEditor({ document }) {
                   )
                 })}
               </div>
-            )}
-
-            <Table
-              label="Технологическая карта"
-              rows={assigned}
-              rowKey={r => r.line + '-' + r.staff_id}
-              rowHref={!editable ? r => '/people/' + r.staff_id : undefined}
-              empty={
-                products.length
-                  ? 'Исполнители ещё не назначены'
-                  : 'Сначала добавьте изделия на вкладке «Выработка»'
-              }
-              columns={[
-                {
-                  label: 'Исполнитель',
-                  primary: true,
-                  cell: r =>
-                    r.worker ? (
-                      <a href={href('/people/' + r.staff_id)}>{r.worker.name}</a>
-                    ) : (
-                      '—'
-                    )
-                },
-                { label: 'Изделие', cell: r => itemText(r.item) },
-                { label: 'Комплектов', align: 'right', cell: r => number(r.quantity) },
-                {
-                  label: 'Расценка',
-                  align: 'right',
-                  cell: r => (r.rate !== undefined ? money(r.rate) : '—')
-                },
-                {
-                  label: 'Начислено',
-                  align: 'right',
-                  cell: r => (r.rate !== undefined ? money(r.rate * r.quantity) : '—')
-                },
-                ...(editable
-                  ? [
-                      {
-                        label: 'Действия',
-                        align: 'right',
-                        cell: r => (
-                          <Button kind="ghost" onClick={() => setEdit({ kind: 'assignment', original: r })}>
-                            Изменить
-                          </Button>
-                        )
-                      }
-                    ]
-                  : [])
-              ]}
-              footer={
-                assigned.length > 0 ? (
-                  <tr>
-                    <th scope="row" colSpan={2}>Итого по технологической карте</th>
-                    <td className="right" data-label="Комплектов">
-                      <strong>{number(assigned.reduce((s, r) => s + r.quantity, 0))}</strong>
-                    </td>
-                    <td />
-                    <td className="right" data-label="Начислено"><strong>{money(totalWages)}</strong></td>
-                    {editable && <td />}
-                  </tr>
-                ) : null
-              }
-            />
-            {editable && (
-              <div className="report-totals">
-                <Button
-                  disabled={!products.length || totalUnassigned === 0 || !eligibleWorkers.length}
-                  onClick={() => setEdit({ kind: 'assignment' })}
-                >
-                  Назначить исполнителя
-                </Button>
-                {totalUnassigned > 0 && (
-                  <span className="muted">
-                    Нераспределённый остаток: <strong>{number(totalUnassigned)} компл.</strong>
-                  </span>
-                )}
-              </div>
-            )}
-          </>
-        )}
-
-        {editable && (
-          <details className="report-note" open={Boolean(report.memo)}>
-            <summary>
-              <svg
-                className="report-note-chevron"
-                width="16"
-                height="16"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="m4 6 4 4 4-4" />
-              </svg>
-              <span>Комментарий</span>
-            </summary>
-            <Field label="Комментарий к отчёту" wide>
-              <textarea
-                value={report.memo}
-                maxLength={500}
-                rows={2}
-                placeholder="Заметки смены или пояснение к отчёту"
-                onChange={e => change({ ...report, memo: e.target.value })}
-              />
-            </Field>
-          </details>
-        )}
-        {!editable && document?.memo && !document?.source_doc && (
-          <p className="inline-note">{document.memo}</p>
-        )}
-
-        <ErrorBox error={action.error} />
-
-        <ActionRow>
-          <Button className="push-left" to="/reports">
-            {editable ? 'Отмена' : 'Назад'}
-          </Button>
-          {editable && (
-            <>
-              <Button disabled={!report.lines.length || action.busy || dateBelowOpenMonth} onClick={() => save(false)}>
-                Сохранить черновик
-              </Button>
-              <Button
-                kind="primary"
-                disabled={!report.lines.length || action.busy || dateBelowOpenMonth}
-                onClick={() => {
-                  if (canPost) {
-                    setConfirm('post')
-                  } else {
-                    selectTab('wages')
-                    toast.info('Распределите весь выпуск по исполнителям перед проведением.')
-                  }
-                }}
-              >
-                Провести отчёт
-              </Button>
-            </>
+            </div>
           )}
+
+          <Table
+            label="Технологическая карта"
+            rows={assigned}
+            rowKey={r => r.line + '-' + r.staff_id}
+            rowHref={!editable ? r => '/people/' + r.staff_id : undefined}
+            empty={
+              products.length
+                ? 'Исполнители ещё не назначены'
+                : 'Сначала добавьте изделия на вкладке «Выработка»'
+            }
+            columns={[
+              {
+                label: 'Исполнитель',
+                primary: true,
+                cell: r =>
+                  r.worker ? (
+                    <a href={href('/people/' + r.staff_id)}>{r.worker.name}</a>
+                  ) : (
+                    '—'
+                  )
+              },
+              { label: 'Изделие', cell: r => itemText(r.item) },
+              { label: 'Комплектов', align: 'right', cell: r => number(r.quantity) },
+              {
+                label: 'Расценка',
+                align: 'right',
+                cell: r => (r.rate !== undefined ? money(r.rate) : '—')
+              },
+              {
+                label: 'Начислено',
+                align: 'right',
+                cell: r => (r.rate !== undefined ? money(r.rate * r.quantity) : '—')
+              },
+              ...(editable
+                ? [
+                    {
+                      label: 'Действия',
+                      align: 'right',
+                      cell: r => (
+                        <Button kind="ghost" onClick={() => setEdit({ kind: 'assignment', original: r })}>
+                          Изменить
+                        </Button>
+                      )
+                    }
+                  ]
+                : [])
+            ]}
+            footer={
+              assigned.length > 0 ? (
+                <tr>
+                  <th scope="row" colSpan={2}>Итого по технологической карте</th>
+                  <td className="right" data-label="Комплектов">
+                    <strong>{number(assigned.reduce((s, r) => s + r.quantity, 0))}</strong>
+                  </td>
+                  <td />
+                  <td className="right" data-label="Начислено"><strong>{money(totalWages)}</strong></td>
+                  {editable && <td />}
+                </tr>
+              ) : null
+            }
+          />
+          {editable && (
+            <div className="report-totals">
+              <Button
+                disabled={!products.length || totalUnassigned === 0 || !eligibleWorkers.length}
+                onClick={() => setEdit({ kind: 'assignment' })}
+              >
+                Назначить исполнителя
+              </Button>
+              {totalUnassigned > 0 && (
+                <span className="muted">
+                  Нераспределённый остаток: <strong>{number(totalUnassigned)} компл.</strong>
+                </span>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {editable && (
+        <div className="surface-panel">
+          <Field label="Комментарий (необязательно)" wide>
+            <textarea
+              value={report.memo}
+              maxLength={500}
+              rows={2}
+              placeholder="Заметки смены или пояснение к отчёту"
+              onChange={e => change({ ...report, memo: e.target.value })}
+            />
+          </Field>
+        </div>
+      )}
+      {!editable && document?.memo && !document?.source_doc && (
+        <p className="inline-note">{document.memo}</p>
+      )}
+
+      <ErrorBox error={action.error} />
+
+      {editable ? (
+        <div className="action-row desktop-form-actions">
+          <Button kind="ghost" className="push-left" to="/reports">
+            Отмена
+          </Button>
+          <Button disabled={!report.lines.length || action.busy || dateBelowOpenMonth} onClick={() => save(false)}>
+            Сохранить черновик
+          </Button>
+          <Button
+            kind="primary"
+            disabled={!report.lines.length || action.busy || dateBelowOpenMonth}
+            onClick={() => {
+              if (canPost) {
+                setConfirm('post')
+              } else {
+                selectTab('wages')
+                toast.info('Распределите весь выпуск по исполнителям перед проведением.')
+              }
+            }}
+          >
+            Провести отчёт
+          </Button>
+        </div>
+      ) : (
+        <div className="action-row action-pair">
+          <Button kind="ghost" className="push-left" to="/reports">
+            Назад
+          </Button>
           {canCorrect && (
             <Button onClick={() => setConfirm('correct')}>Исправить отчёт</Button>
           )}
           {document?.status === 'posted' && write && minDate && document.date < minDate && (
             <span className="muted">Период закрыт для исправления</span>
           )}
-        </ActionRow>
-      </Card>
+        </div>
+      )}
 
       {document && <DocumentHistory document={{ ...document, movements: [] }} defaultOpen={document.status !== 'draft'} />}
 
@@ -1611,7 +1603,7 @@ export function ReportMovements({ id }) {
             actions={<Button to={'/reports/' + d.id}>К отчёту</Button>}
           >
             <DocumentRelationBanner document={d} />
-            <Card
+            <Section
               title="Материалы и выпуск"
               subtitle={
                 <>
@@ -1671,8 +1663,8 @@ export function ReportMovements({ id }) {
                 ]}
               />
               <p className="muted">Остаток указан сразу после проведения соответствующей операции.</p>
-            </Card>
-            <Card title="Сдельная зарплата">
+            </Section>
+            <Section title="Сдельная зарплата">
               <Table
                 label="Сдельная зарплата по отчёту"
                 rows={assignmentRows}
@@ -1707,7 +1699,7 @@ export function ReportMovements({ id }) {
                   ) : null
                 }
               />
-            </Card>
+            </Section>
             <DocumentHistory document={{ ...d, movements: [] }} defaultOpen />
           </Page>
         )

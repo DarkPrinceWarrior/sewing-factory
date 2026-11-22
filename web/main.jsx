@@ -4,6 +4,7 @@ import '@fontsource-variable/inter'
 import './style.css'
 import {
   AppContext,
+  BrandLogo,
   Button,
   Card,
   Dialog,
@@ -58,7 +59,7 @@ const menuGroups = [
     key: 'system',
     label: 'Система',
     items: [
-      ['/settings', 'Настройки', 'settings']
+      ['/profile', 'Профиль', 'settings']
     ]
   }
 ]
@@ -77,25 +78,20 @@ const regionalGroups = (city) => [
     key: 'system',
     label: 'Система',
     items: [
-      ['/settings', 'Настройки', 'settings']
+      ['/profile', 'Профиль', 'settings']
     ]
   }
 ]
 
+const isProfilePath = (path) => path === '/profile' || path === '/settings'
 const active = (path, to) => path === to || path.startsWith(to + '/')
 const isCentralWriter = (role) => role === 'admin' || role === 'accountant'
-const navActive = (path, to, role) =>
-  active(path, to) || (to === '/stock' && isCentralWriter(role) && (path === '/sales' || path.startsWith('/sales/')))
+const navActive = (path, to, role) => {
+  if (isProfilePath(to)) return isProfilePath(path)
+  return active(path, to) || (to === '/stock' && isCentralWriter(role) && (path === '/sales' || path.startsWith('/sales/')))
+}
 const section = (code) => new RegExp('^/' + code + '/(new|[1-9][0-9]*)$')
 const homePath = (user) => (user?.role === 'regional' ? '/regional' : '/overview')
-
-function openPasswordSettingsRoute() {
-  go('/settings')
-  window.setTimeout(() => {
-    const input = document.querySelector('#workspace input[autocomplete="current-password"]')
-    input?.focus()
-  }, 80)
-}
 
 function initials(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean)
@@ -153,7 +149,7 @@ function AccessDenied({ home, roleName, message }) {
           <Button kind="primary" to={home}>
             {home === '/regional' ? 'К остаткам склада' : 'Вернуться в обзор'}
           </Button>
-          <Button to="/settings">Настройки профиля</Button>
+          <Button to="/profile">Профиль</Button>
         </div>
       </Card>
     </Page>
@@ -231,7 +227,10 @@ function Login({ done, initialError = '' }) {
             })
           }}
         >
-          <span className="login-eyebrow">Швейная фабрика</span>
+          <div className="login-brand">
+            <BrandLogo size={36} />
+            <span className="login-eyebrow">Швейная фабрика</span>
+          </div>
           <h1>Войти в рабочее пространство</h1>
           <Field label="Электронная почта">
             <input
@@ -298,179 +297,11 @@ function Login({ done, initialError = '' }) {
             Автоматический сброс пароля не подключён. Обратитесь к администратору фабрики, чтобы получить новый пароль.
           </p>
           <p className="muted">
-            После входа вы сможете самостоятельно задать новый пароль в разделе «Настройки».
+            После входа вы сможете самостоятельно задать новый пароль на странице «Профиль».
           </p>
         </Dialog>
       )}
     </main>
-  )
-}
-
-function ProfileMenu({ user, logout }) {
-  const [open, setOpen] = useState(false)
-  const containerRef = useRef(null)
-  const menuRef = useRef(null)
-  const pendingFocus = useRef(null)
-  const regional = user.role === 'regional'
-
-  function menuItems() {
-    return [...(menuRef.current?.querySelectorAll('[role="menuitem"]:not(:disabled)') || [])]
-  }
-
-  useEffect(() => {
-    if (!open) return
-    if (pendingFocus.current !== null) {
-      const items = menuItems()
-      const target = pendingFocus.current === 'last' ? items.at(-1) : items[0]
-      pendingFocus.current = null
-      requestAnimationFrame(() => target?.focus({ preventScroll: true }))
-    }
-    const onPointerDown = (e) => {
-      if (!containerRef.current?.contains(e.target)) setOpen(false)
-    }
-    const onFocusIn = (e) => {
-      if (!containerRef.current?.contains(e.target)) setOpen(false)
-    }
-    const onKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        setOpen(false)
-        containerRef.current?.querySelector('button.profile')?.focus({ preventScroll: true })
-      }
-    }
-    document.addEventListener('pointerdown', onPointerDown, true)
-    document.addEventListener('focusin', onFocusIn)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown, true)
-      document.removeEventListener('focusin', onFocusIn)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [open])
-
-  function onTriggerKeyDown(e) {
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault()
-      pendingFocus.current = e.key === 'ArrowUp' ? 'last' : 'first'
-      setOpen(true)
-    }
-  }
-
-  function onMenuKeyDown(e) {
-    const items = menuItems()
-    if (!items.length) return
-    const current = items.indexOf(document.activeElement)
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      items[(current + 1) % items.length]?.focus({ preventScroll: true })
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      items[(current <= 0 ? items.length - 1 : current - 1)]?.focus({ preventScroll: true })
-    } else if (e.key === 'Home') {
-      e.preventDefault()
-      items[0]?.focus({ preventScroll: true })
-    } else if (e.key === 'End') {
-      e.preventDefault()
-      items.at(-1)?.focus({ preventScroll: true })
-    }
-  }
-
-  function openPasswordSettings() {
-    setOpen(false)
-    openPasswordSettingsRoute()
-  }
-
-  return (
-    <div className="profile-menu" ref={containerRef}>
-      <button
-        type="button"
-        className="profile"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={'Профиль · ' + user.name}
-        onClick={() => {
-          pendingFocus.current = null
-          setOpen(v => !v)
-        }}
-        onKeyDown={onTriggerKeyDown}
-      >
-        <span aria-hidden="true" className="avatar">{initials(user.name)}</span>
-        <span>
-          <strong>{user.name}</strong>
-          <small>{regional && user.city ? `${user.role_name} · ${user.city}` : user.role_name}</small>
-        </span>
-        <svg className="profile-chevron" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="m4 6 4 4 4-4" />
-        </svg>
-      </button>
-      {open && (
-        <div
-          ref={menuRef}
-          className="profile-popover"
-          role="menu"
-          aria-label="Меню профиля"
-          onKeyDown={onMenuKeyDown}
-        >
-          <div className="profile-popover-head">
-            <span aria-hidden="true" className="avatar">{initials(user.name)}</span>
-            <div>
-              <strong>{user.name}</strong>
-              <span>{user.email}</span>
-            </div>
-          </div>
-          <div className="profile-popover-meta">
-            <div>Роль: <strong>{user.role_name}</strong></div>
-            {regional && user.warehouse_name && (
-              <div>Склад: <strong>{user.warehouse_name}{user.city ? ' · ' + user.city : ''}</strong></div>
-            )}
-          </div>
-          <div className="profile-popover-actions">
-            <button
-              type="button"
-              className="profile-menu-item"
-              role="menuitem"
-              onClick={() => {
-                setOpen(false)
-                go('/settings')
-              }}
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <circle cx="10" cy="7" r="3" />
-                <path d="M4.5 16.5a5.5 5.5 0 0 1 11 0" />
-              </svg>
-              <span>Настройки профиля</span>
-            </button>
-            <button
-              type="button"
-              className="profile-menu-item"
-              role="menuitem"
-              onClick={openPasswordSettings}
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <rect x="4.5" y="9" width="11" height="7.5" rx="2" />
-                <path d="M7 9V6.5a3 3 0 0 1 6 0V9" />
-              </svg>
-              <span>Сменить пароль</span>
-            </button>
-            <button
-              type="button"
-              className="profile-menu-item is-danger"
-              role="menuitem"
-              onClick={() => {
-                setOpen(false)
-                logout()
-              }}
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M8 16H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3M13 14l4-4-4-4M17 10H8" />
-              </svg>
-              <span>Выйти</span>
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -479,7 +310,7 @@ function Route({ path, user }) {
   const id = match === 'new' ? undefined : Number(match)
   const home = homePath(user)
 
-  if (path === '/settings') return <Settings />
+  if (isProfilePath(path)) return <Settings />
 
   if (user.role === 'regional') {
     if (path === '/regional') return <WarehouseDetail id={user.warehouse_id} regional />
@@ -570,6 +401,11 @@ function breadcrumbs(path, items, workspace, headingTitle) {
     return crumbs
   }
 
+  if (isProfilePath(path)) {
+    crumbs.push(['/profile', 'Профиль'])
+    return crumbs
+  }
+
   if (path === root[0]) {
     const currentItem = items.find(([to]) => to === path)
     if (currentItem) crumbs.push([currentItem[0], currentItem[1]])
@@ -579,9 +415,6 @@ function breadcrumbs(path, items, workspace, headingTitle) {
   const sectionItem = items.find(([to]) => navActive(path, to, user.role))
   if (sectionItem) {
     crumbs.push([sectionItem[0], sectionItem[1]])
-  } else if (path === '/settings') {
-    crumbs.push(['/settings', 'Настройки'])
-    return crumbs
   } else {
     crumbs.push([path, headingTitle || 'Раздел'])
     return crumbs
@@ -819,51 +652,54 @@ function OfflineBanner({ online }) {
   )
 }
 
-function MobileHeader({ workspace, crumbs, home, profileOpen, onOpenProfile }) {
+function MobileHeader({ workspace, current, crumbs, home, backFallback }) {
   const { user } = workspace
   const regional = user.role === 'regional'
+  const onProfile = isProfilePath(current)
   const isNested = crumbs.length > 2
   const parent = isNested ? crumbs.at(-2) : null
   const currentCrumb = crumbs.at(-1)
+  const showBack = (isNested && parent) || onProfile
+  const backTarget = onProfile ? (backFallback || home) : parent?.[0]
+  const backLabel = onProfile ? 'Вернуться' : parent?.[1]
+  const headerTitle = onProfile ? 'Профиль' : currentCrumb?.[1]
 
   return (
     <header className={'mobile-header' + (regional ? ' regional' : '')}>
-      {isNested && parent ? (
+      {showBack && backTarget ? (
         <>
           <a
             className="mobile-back-btn"
-            href={href(parent[0])}
-            aria-label={'Назад: ' + parent[1]}
-            title={parent[1]}
+            href={href(backTarget)}
+            aria-label={'Назад: ' + (backLabel || 'главная')}
+            title={backLabel || 'Назад'}
           >
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <path d="m12.5 5-5 5 5 5" />
             </svg>
             <span>Назад</span>
           </a>
-          <span className="mobile-header-title" title={currentCrumb?.[1]}>
-            {currentCrumb?.[1]}
+          <span className="mobile-header-title" title={headerTitle}>
+            {headerTitle}
           </span>
         </>
       ) : (
         <a className="mobile-brand" href={href(home)}>
-          <span className="sidebar-brand-mark" aria-hidden="true">ШФ</span>
+          <BrandLogo size={30} />
           <span className="sidebar-brand-copy">
             <strong>{workspace.settings?.company || 'Швейная фабрика'}</strong>
             <span>{regional ? 'Склад · ' + user.city : 'Иваново'}</span>
           </span>
         </a>
       )}
-      <button
-        type="button"
+      <a
         className="mobile-avatar-btn"
+        href={href('/profile')}
+        aria-current={onProfile ? 'page' : undefined}
         aria-label={'Профиль · ' + user.name}
-        aria-haspopup="dialog"
-        aria-expanded={profileOpen}
-        onClick={onOpenProfile}
       >
         <span aria-hidden="true" className="avatar">{initials(user.name)}</span>
-      </button>
+      </a>
     </header>
   )
 }
@@ -875,7 +711,7 @@ function BottomNav({ current, user, itemBadge, moreOpen, onOpenMore, onCloseShee
         ['/regional', 'Остатки', 'stock'],
         ['/receiving', 'Приёмка', 'receiving'],
         ['/sales', 'Продажи', 'sales'],
-        ['/settings', 'Настройки', 'settings']
+        ['/profile', 'Профиль', 'settings']
       ]
     : [
         ['/overview', 'Обзор', 'overview'],
@@ -886,8 +722,8 @@ function BottomNav({ current, user, itemBadge, moreOpen, onOpenMore, onCloseShee
       ]
 
   const moreRoutes = user.role === 'master'
-    ? ['/people', '/settings']
-    : ['/payroll', '/people', '/month', '/settings']
+    ? ['/people', '/profile', '/settings']
+    : ['/payroll', '/people', '/month', '/profile', '/settings']
 
   function handleSelect(to) {
     if (to === '__more__') {
@@ -895,7 +731,7 @@ function BottomNav({ current, user, itemBadge, moreOpen, onOpenMore, onCloseShee
       return
     }
     onCloseSheets?.()
-    if (current === to) {
+    if (current === to || (isProfilePath(to) && isProfilePath(current))) {
       window.scrollTo({ top: 0, behavior: 'smooth' })
       return
     }
@@ -948,20 +784,20 @@ function MoreSheet({ open, onClose, current, user, logout, isStandalone, onInsta
   const secondaryItems = user.role === 'master'
     ? [
         ['/people', 'Сотрудники', 'people'],
-        ['/settings', 'Настройки', 'settings']
+        ['/profile', 'Профиль', 'settings']
       ]
     : [
         ['/payroll', 'Зарплата', 'payroll'],
         ['/people', 'Сотрудники', 'people'],
         ['/month', 'Итоги месяца', 'month'],
-        ['/settings', 'Настройки', 'settings']
+        ['/profile', 'Профиль', 'settings']
       ]
 
   return (
     <Sheet open={open} onClose={onClose} title="Ещё" subtitle={user.role_name}>
       <div className="sheet-menu-list" role="navigation" aria-label="Дополнительные разделы">
         {secondaryItems.map(([to, label, icon]) => {
-          const isActive = active(current, to)
+          const isActive = navActive(current, to, user.role)
           return (
             <a
               key={to}
@@ -982,92 +818,6 @@ function MoreSheet({ open, onClose, current, user, logout, isStandalone, onInsta
             </a>
           )
         })}
-      </div>
-      {!isStandalone && (
-        <div className="sheet-menu-list">
-          <button
-            type="button"
-            className="sheet-menu-item"
-            onClick={() => {
-              onClose()
-              onInstallPwa()
-            }}
-          >
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <path d="M10 3v9.5M6.5 9.5 10 13l3.5-3.5M4 16.5h12" />
-            </svg>
-            <span>Установить приложение</span>
-            <svg className="sheet-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="m6 3.5 4.5 4.5L6 12.5" />
-            </svg>
-          </button>
-        </div>
-      )}
-      <div className="sheet-menu-list">
-        <button
-          type="button"
-          className="sheet-menu-item is-danger"
-          onClick={() => {
-            onClose()
-            logout()
-          }}
-        >
-          <svg viewBox="0 0 20 20" aria-hidden="true">
-            <path d="M8 16H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3M13 14l4-4-4-4M17 10H8" />
-          </svg>
-          <span>Выйти из аккаунта</span>
-        </button>
-      </div>
-    </Sheet>
-  )
-}
-
-function ProfileSheet({ open, onClose, user, updatedAt, refreshing, logout, isStandalone, onInstallPwa }) {
-  const regional = user.role === 'regional'
-  return (
-    <Sheet open={open} onClose={onClose} title={user.name} subtitle={user.email}>
-      <div className="profile-popover-meta">
-        <div>Роль: <strong>{user.role_name}</strong></div>
-        {regional && user.warehouse_name && (
-          <div>Склад: <strong>{user.warehouse_name}{user.city ? ' · ' + user.city : ''}</strong></div>
-        )}
-        <div><RefreshStatus at={updatedAt} busy={refreshing} /></div>
-      </div>
-      <div className="sheet-menu-list">
-        <button
-          type="button"
-          className="sheet-menu-item"
-          onClick={() => {
-            onClose()
-            go('/settings')
-          }}
-        >
-          <svg viewBox="0 0 20 20" aria-hidden="true">
-            <circle cx="10" cy="7" r="3" />
-            <path d="M4.5 16.5a5.5 5.5 0 0 1 11 0" />
-          </svg>
-          <span>Настройки профиля</span>
-          <svg className="sheet-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
-            <path d="m6 3.5 4.5 4.5L6 12.5" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          className="sheet-menu-item"
-          onClick={() => {
-            onClose()
-            openPasswordSettingsRoute()
-          }}
-        >
-          <svg viewBox="0 0 20 20" aria-hidden="true">
-            <rect x="4.5" y="9" width="11" height="7.5" rx="2" />
-            <path d="M7 9V6.5a3 3 0 0 1 6 0V9" />
-          </svg>
-          <span>Сменить пароль</span>
-          <svg className="sheet-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
-            <path d="m6 3.5 4.5 4.5L6 12.5" />
-          </svg>
-        </button>
         {!isStandalone && (
           <button
             type="button"
@@ -1097,7 +847,7 @@ function ProfileSheet({ open, onClose, user, updatedAt, refreshing, logout, isSt
           <svg viewBox="0 0 20 20" aria-hidden="true">
             <path d="M8 16H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3M13 14l4-4-4-4M17 10H8" />
           </svg>
-          <span>Выйти</span>
+          <span>Выйти из аккаунта</span>
         </button>
       </div>
     </Sheet>
@@ -1115,9 +865,13 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, online, pwa, l
   const setPageHeading = useCallback(title => setHeading({ path, title }), [path])
   const [revision, setRevision] = useState(0)
   const [moreOpen, setMoreOpen] = useState(false)
-  const [profileSheetOpen, setProfileSheetOpen] = useState(false)
+  const lastNonProfileRef = useRef(home)
   const calendarDayRef = useRef(moscowDateIso())
   const refreshPage = useCallback(() => setRevision(n => n + 1), [])
+
+  if (!isProfilePath(current)) {
+    lastNonProfileRef.current = path === '/' ? home : path
+  }
 
   const groups = (regional ? regionalGroups(user.city) : menuGroups)
     .map(group => ({
@@ -1145,7 +899,6 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, online, pwa, l
 
   useEffect(() => {
     setMoreOpen(false)
-    setProfileSheetOpen(false)
     window.scrollTo(0, 0)
   }, [current])
 
@@ -1199,7 +952,7 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, online, pwa, l
         <aside className="sidebar">
           <div className="sidebar-head">
             <a className="sidebar-brand" href={href(home)}>
-              <span className="sidebar-brand-mark" aria-hidden="true">ШФ</span>
+              <BrandLogo size={30} />
               <span className="sidebar-brand-copy">
                 <strong>{workspace.settings?.company || 'Швейная фабрика'}</strong>
                 <span>{regional ? 'Склад · ' + user.city : 'Иваново'}</span>
@@ -1250,15 +1003,26 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, online, pwa, l
           <RegisterBreadcrumbs crumbs={crumbs} />
           <div className="topbar-right">
             <RefreshStatus at={updatedAt} busy={refreshing} />
-            <ProfileMenu user={user} logout={logout} />
+            <a
+              className="profile"
+              href={href('/profile')}
+              aria-current={isProfilePath(current) ? 'page' : undefined}
+              aria-label={'Профиль · ' + user.name}
+            >
+              <span aria-hidden="true" className="avatar">{initials(user.name)}</span>
+              <span>
+                <strong>{user.name}</strong>
+                <small>{regional && user.city ? `${user.role_name} · ${user.city}` : user.role_name}</small>
+              </span>
+            </a>
           </div>
         </header>
         <MobileHeader
           workspace={workspace}
+          current={current}
           crumbs={crumbs}
           home={home}
-          profileOpen={profileSheetOpen}
-          onOpenProfile={() => setProfileSheetOpen(true)}
+          backFallback={lastNonProfileRef.current}
         />
         <main id="workspace" className="content" tabIndex="-1">
           <WorkspaceBoundary
@@ -1275,10 +1039,7 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, online, pwa, l
           itemBadge={itemBadge}
           moreOpen={moreOpen}
           onOpenMore={() => setMoreOpen(true)}
-          onCloseSheets={() => {
-            setMoreOpen(false)
-            setProfileSheetOpen(false)
-          }}
+          onCloseSheets={() => setMoreOpen(false)}
         />
         {!regional && (
           <MoreSheet
@@ -1291,16 +1052,6 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, online, pwa, l
             onInstallPwa={pwa.triggerInstall}
           />
         )}
-        <ProfileSheet
-          open={profileSheetOpen}
-          onClose={() => setProfileSheetOpen(false)}
-          user={user}
-          updatedAt={updatedAt}
-          refreshing={refreshing}
-          logout={logout}
-          isStandalone={pwa.isStandalone}
-          onInstallPwa={pwa.triggerInstall}
-        />
         <PwaInstallGuide
           open={pwa.installOpen}
           onClose={pwa.closeInstallGuide}

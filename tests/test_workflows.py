@@ -642,3 +642,51 @@ def test_gzip_and_pwa_headers(client, tmp_path):
         assert r_png.status_code == 200
         assert r_png.headers["content-type"] == "image/png"
         assert "max-age=86400" in r_png.headers["cache-control"]
+
+
+def test_profile_workspace_password_and_logout_for_all_roles(client):
+    role_cases = [
+        ("admin", "admin", True, True),
+        ("oksana", "accountant", True, True),
+        ("master", "master", True, False),
+        ("moscow", "regional", False, False),
+    ]
+    for prefix, expected_role, has_settings, has_in_transit in role_cases:
+        ws = login(client, prefix)
+        u = ws["user"]
+        assert u["role"] == expected_role
+        assert u["email"] == f"{prefix}@factory.local"
+        assert u["name"] and u["role_name"]
+        assert ("settings" in ws) is has_settings
+        assert ("in_transit" in ws) is has_in_transit
+        if expected_role == "regional":
+            assert u["warehouse_id"] == 6 and u["city"] == "Москва" and u["warehouse_name"]
+        else:
+            assert ws["settings"]["open_month"]
+
+        # Wrong old password and too-short new password rejected with 422
+        assert client.post("/api/password", json={"old": "WrongPass!1", "new": "ValidPass!2026"}).status_code == 422
+        assert client.post("/api/password", json={"old": "Ivanovo!2026", "new": "short"}).status_code == 422
+
+        # Valid password change rotates session and keeps current client authenticated
+        prev_cookie = client.cookies.get("factory_session")
+        new_pw = f"Rotate!{prefix}2026"
+        assert client.post("/api/password", json={"old": "Ivanovo!2026", "new": new_pw}).status_code == 200
+        assert client.get("/api/workspace").status_code == 200
+        with TestClient(app, cookies={"factory_session": prev_cookie}) as stale:
+            assert stale.get("/api/workspace").status_code == 401
+        # Restore default password
+        assert client.post("/api/password", json={"old": new_pw, "new": "Ivanovo!2026"}).status_code == 200
+
+        # Logout invalidates active session cleanly
+        active_cookie = client.cookies.get("factory_session")
+        assert client.post("/api/logout").status_code == 200
+        assert client.get("/api/workspace").status_code == 401
+        with TestClient(app, cookies={"factory_session": active_cookie}) as logged_out:
+            assert logged_out.get("/api/workspace").status_code == 401
+
+    # Also verify vector logo icon.svg is served cleanly
+    svg_res = client.get("/icons/icon.svg")
+    assert svg_res.status_code == 200
+    assert "image/svg+xml" in svg_res.headers.get("content-type", "")
+    assert "<svg" in svg_res.text

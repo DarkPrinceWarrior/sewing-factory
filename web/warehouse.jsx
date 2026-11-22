@@ -2,7 +2,7 @@ import React, {useId, useState} from 'react'
 import {DocumentHistory, Wip} from './production'
 import {
   ActionRow, Button, Card, Confirm, DateControl, DateRange, Details, Dialog, Download, ErrorBox, Field,
-  FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Select, Status, Stepper, Table, Tabs,
+  FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Section, Select, Status, Stepper, Table, Tabs,
   api, dateTime, dayText, go, href, itemText, matchesSearch, money, number, payments, qty, roleCanWrite,
   routeWith, useAction, useFilters, useRemote, useSearchOptions, useToast, useWorkspace
 } from './ui'
@@ -161,7 +161,7 @@ function CentralInventory({add, setAdd}) {
       label: 'Остаток',
       align: 'right',
       width: '13%',
-      cell: w => w.kind === 'raw' ? number(w.positions) + ' поз.' : qty(w.quantity) + ' компл.'
+      cell: w => w.kind === 'raw' ? number(w.positions) + ' позиций' : qty(w.quantity) + ' компл.'
     },
     {label: 'Стоимость', align: 'right', width: '14%', cell: w => money(w.value)},
     ...(canWrite ? [{
@@ -187,7 +187,7 @@ function CentralInventory({add, setAdd}) {
               key: 'finished',
               label: 'Готовая продукция',
               value: qty(total(retail, 'quantity')) + ' компл.',
-              meta: retail.length + ' складов · ' + new Set(retail.map(w => w.city)).size + ' гор.'
+              meta: retail.length + ' складов в ' + new Set(retail.map(w => w.city)).size + ' городах'
             },
             {
               key: 'value',
@@ -205,7 +205,7 @@ function CentralInventory({add, setAdd}) {
           ]}
         />
       )}
-      <Card
+      <Section
         className="warehouse-register"
         title={isMaster ? 'Склады · Иваново' : 'Склады по городам'}
       >
@@ -217,10 +217,12 @@ function CentralInventory({add, setAdd}) {
           rowHref={w => '/stock/' + w.id}
           empty="Склады по этому запросу не найдены"
         />
-      </Card>
-      <Card title="Внутренние запасы · Иваново">
-        <Wip rows={internal} links/>
-      </Card>
+      </Section>
+      <Section title="Внутренние запасы · Иваново">
+        <div className="surface-panel">
+          <Wip rows={internal} links/>
+        </div>
+      </Section>
       {add && <WarehouseForm close={() => setAdd(false)} done={() => { ws.refresh(); setAdd(false) }}/>}
     </>
   )
@@ -315,7 +317,7 @@ export function WarehouseDetail({id, regional = false}) {
 
         const footer = rows.length > 0 ? (
           <tr>
-            <td colSpan={2}><strong>Итого ({number(rows.length)} поз.)</strong></td>
+            <td colSpan={2}><strong>Итого ({number(rows.length)} позиций)</strong></td>
             {isRaw && (
               <td className="right" data-label="На начало">
                 {singleUnit ? qty(rows.reduce((s, r) => s + r.quantity - r.incoming + r.outgoing, 0)) + ' ' + singleUnit : '—'}
@@ -342,10 +344,10 @@ export function WarehouseDetail({id, regional = false}) {
               <>
                 {isRaw && roleCanWrite(ws.user) && <Button kind="primary" to="/stock/receipts/new">Оформить приход</Button>}
                 {w.kind === 'finished' && roleCanWrite(ws.user) && (
-                  <>
+                  <div className="action-pair">
                     <Button kind="secondary" to="/stock/transfers/new">Переместить</Button>
                     <Button kind="primary" to="/sales/new?warehouse=5">Новая продажа</Button>
-                  </>
+                  </div>
                 )}
                 {regional && <Button kind="primary" to="/sales/new">Новая продажа</Button>}
               </>
@@ -357,8 +359,8 @@ export function WarehouseDetail({id, regional = false}) {
                   {
                     key: 'in-stock',
                     label: 'В наличии',
-                    value: number(inStockPositions) + ' поз.',
-                    meta: 'Всего: ' + number(d.rows.length)
+                    value: number(inStockPositions),
+                    meta: 'Из ' + number(d.rows.length) + ' позиций'
                   },
                   {
                     key: 'qty',
@@ -382,37 +384,35 @@ export function WarehouseDetail({id, regional = false}) {
                 ]}
               />
             )}
-            <Card>
-              <Tabs value={selected} onChange={value => selection.change('tab', value)} items={tabs}/>
-              {selected === 'stock' && (
-                <>
-                  <RegistryTools
-                    state={stock}
-                    total={rows.length}
-                    placeholder={isRaw ? 'Материал, категория или артикул' : 'Изделие, размер или артикул'}
-                  />
-                  <Table
-                    label="Текущие остатки"
-                    rows={rows.slice((stock.page - 1) * pageSize, stock.page * pageSize)}
-                    rowHref={isRaw ? (r => '/stock/1/items/' + r.item_id) : undefined}
-                    hasPager={rows.length > 0}
-                    footer={footer}
-                    empty={stock.filters.search ? 'Товары не найдены' : 'На этом складе пока нет остатков'}
-                    columns={columns}
-                  />
-                  <Pager
-                    page={stock.page}
-                    size={pageSize}
-                    change={stock.setPage}
-                    onSizeChange={s => { setPageSize(s); stock.setPage(1) }}
-                    total={rows.length}
-                  />
-                  {rows.length > 0 && <ActionRow><Download path={'/warehouses/' + id} options={stock.filters}/></ActionRow>}
-                </>
-              )}
-              {selected === 'history' && <StockHistory id={id} items={d.rows}/>}
-              {selected === 'receipts' && <DocumentRegister kind="receipt" inline/>}
-            </Card>
+            <Tabs value={selected} onChange={value => selection.change('tab', value)} items={tabs}/>
+            {selected === 'stock' && (
+              <Section>
+                <RegistryTools
+                  state={stock}
+                  total={rows.length}
+                  placeholder={isRaw ? 'Материал, категория или артикул' : 'Изделие, размер или артикул'}
+                />
+                <Table
+                  label="Текущие остатки"
+                  rows={rows.slice((stock.page - 1) * pageSize, stock.page * pageSize)}
+                  rowHref={isRaw ? (r => '/stock/1/items/' + r.item_id) : undefined}
+                  hasPager={rows.length > 0}
+                  footer={footer}
+                  empty={stock.filters.search ? 'Товары не найдены' : 'На этом складе пока нет остатков'}
+                  columns={columns}
+                />
+                <Pager
+                  page={stock.page}
+                  size={pageSize}
+                  change={stock.setPage}
+                  onSizeChange={s => { setPageSize(s); stock.setPage(1) }}
+                  total={rows.length}
+                />
+                {rows.length > 0 && <ActionRow><Download path={'/warehouses/' + id} options={stock.filters}/></ActionRow>}
+              </Section>
+            )}
+            {selected === 'history' && <StockHistory id={id} items={d.rows}/>}
+            {selected === 'receipts' && <DocumentRegister kind="receipt" inline/>}
           </Page>
         )
       }}
@@ -655,7 +655,7 @@ function DocumentRegister({kind, regional = false, inline = false}) {
       />
     </>
   )
-  return inline ? contents : <Card>{contents}</Card>
+  return <Section>{contents}</Section>
 }
 
 function BreakdownBars({rows, totalValue, labelFor, keyFor, metaFor, colorFor, onSelect}) {
@@ -663,7 +663,7 @@ function BreakdownBars({rows, totalValue, labelFor, keyFor, metaFor, colorFor, o
   const safeTotal = Math.max(1, totalValue || 0)
 
   return (
-    <div className="cost-breakdown">
+    <div className="surface-panel">
       {rows.map((r, idx) => {
         const share = Math.round((r.total || 0) / safeTotal * 100)
         const width = Math.max(2, Math.round((r.total || 0) / maxVal * 100))
@@ -707,100 +707,100 @@ function SalesOverview({regional = false}) {
 
   return (
     <>
-      <Card title={regional ? 'Продажи за период' : 'Сводка продаж'}>
-        <DocumentFilters
-          state={state}
-          kind="sale"
-          regional={regional}
-          total={data.pending ? undefined : docsRequest.data?.total}
-        />
-        <Guard request={data.pending ? {} : request}>
-          {d => {
-            const avgCheck = d.documents ? Math.round(d.total / d.documents) : 0
-            const payRows = d.payments || []
-            const topItems = (d.items || []).slice(0, 5)
-            const cityTotal = total(d.cities || [], 'total')
-            return (
-              <>
-                <MetricStrip
-                  items={[
-                    {
-                      key: 'total',
-                      label: 'Сумма продаж',
-                      value: money(d.total),
-                      meta: 'Ср. чек: ' + (d.documents ? money(avgCheck) : '—')
-                    },
-                    {
-                      key: 'qty',
-                      label: 'Продано',
-                      value: qty(d.quantity) + ' компл.',
-                      meta: regional ? 'Розничная реализация' : 'По выбранным складам'
-                    },
-                    {
-                      key: 'docs',
-                      label: 'Документов',
-                      value: number(d.documents),
-                      meta: 'Проведённые продажи'
-                    },
-                    ...(!regional ? [{
-                      key: 'cost',
-                      label: 'Учётная стоимость',
-                      value: money(d.cost),
-                      meta: 'Разница: ' + money((d.total || 0) - (d.cost || 0))
-                    }] : [])
-                  ]}
-                />
+      <DocumentFilters
+        state={state}
+        kind="sale"
+        regional={regional}
+        total={data.pending ? undefined : docsRequest.data?.total}
+      />
+      <Guard request={data.pending ? {} : request}>
+        {d => {
+          const avgCheck = d.documents ? Math.round(d.total / d.documents) : 0
+          const payRows = d.payments || []
+          const topItems = (d.items || []).slice(0, 5)
+          const cityTotal = total(d.cities || [], 'total')
+          return (
+            <>
+              <MetricStrip
+                items={[
+                  {
+                    key: 'total',
+                    label: 'Сумма продаж',
+                    value: money(d.total),
+                    meta: 'Средний чек: ' + (d.documents ? money(avgCheck) : '—')
+                  },
+                  {
+                    key: 'qty',
+                    label: 'Продано',
+                    value: qty(d.quantity) + ' компл.',
+                    meta: regional ? 'Розничная реализация' : 'По выбранным складам'
+                  },
+                  {
+                    key: 'docs',
+                    label: 'Документов',
+                    value: number(d.documents),
+                    meta: 'Проведённые продажи'
+                  },
+                  ...(!regional ? [{
+                    key: 'cost',
+                    label: 'Учётная стоимость',
+                    value: money(d.cost),
+                    meta: 'Разница: ' + money((d.total || 0) - (d.cost || 0))
+                  }] : [])
+                ]}
+              />
 
-                {(payRows.length > 0 || (!regional && d.cities.length > 0) || (regional && topItems.length > 0)) && (
-                  <div className="grid-two">
-                    {!regional && d.cities.length > 0 && (
-                      <Card title="По складам">
-                        <BreakdownBars
-                          rows={d.cities}
-                          totalValue={d.total}
-                          keyFor={r => r.id}
-                          labelFor={r => r.city}
-                          metaFor={r => qty(r.quantity) + ' компл.'}
-                          colorFor={() => 'sew'}
-                          onSelect={r => state.change('warehouse', String(state.filters.warehouse) === String(r.id) ? '' : String(r.id))}
-                        />
-                      </Card>
-                    )}
-                    {payRows.length > 0 && (
-                      <Card title="По способам оплаты">
-                        <BreakdownBars
-                          rows={payRows}
-                          totalValue={d.total}
-                          keyFor={r => r.payment}
-                          labelFor={r => payments[r.payment] || r.payment}
-                          metaFor={r => number(r.docs) + ' док.'}
-                          colorFor={r => payBarClass[r.payment] || 'cut'}
-                        />
-                      </Card>
-                    )}
-                    {regional && topItems.length > 0 && (
-                      <Card title="Популярные изделия">
-                        <BreakdownBars
-                          rows={topItems}
-                          totalValue={d.total}
-                          keyFor={r => r.id}
-                          labelFor={itemText}
-                          metaFor={r => qty(r.quantity) + ' компл.'}
-                          colorFor={() => 'sew'}
-                        />
-                      </Card>
-                    )}
-                  </div>
-                )}
+              {(payRows.length > 0 || (!regional && d.cities.length > 0) || (regional && topItems.length > 0)) && (
+                <div className="grid-two">
+                  {!regional && d.cities.length > 0 && (
+                    <Section title="По складам">
+                      <BreakdownBars
+                        rows={d.cities}
+                        totalValue={d.total}
+                        keyFor={r => r.id}
+                        labelFor={r => r.city}
+                        metaFor={r => qty(r.quantity) + ' компл.'}
+                        colorFor={() => 'sew'}
+                        onSelect={r => state.change('warehouse', String(state.filters.warehouse) === String(r.id) ? '' : String(r.id))}
+                      />
+                    </Section>
+                  )}
+                  {payRows.length > 0 && (
+                    <Section title="По способам оплаты">
+                      <BreakdownBars
+                        rows={payRows}
+                        totalValue={d.total}
+                        keyFor={r => r.payment}
+                        labelFor={r => payments[r.payment] || r.payment}
+                        metaFor={r => number(r.docs) + ' продаж'}
+                        colorFor={r => payBarClass[r.payment] || 'cut'}
+                      />
+                    </Section>
+                  )}
+                  {regional && topItems.length > 0 && (
+                    <Section title="Популярные изделия">
+                      <BreakdownBars
+                        rows={topItems}
+                        totalValue={d.total}
+                        keyFor={r => r.id}
+                        labelFor={itemText}
+                        metaFor={r => qty(r.quantity) + ' компл.'}
+                        colorFor={() => 'sew'}
+                      />
+                    </Section>
+                  )}
+                </div>
+              )}
 
-                {!regional && d.cities.length > 0 && (
+              {!regional && d.cities.length > 0 && (
+                <Section title="Сводка продаж по городам">
                   <Table
                     label="Сводка продаж по городам"
                     rows={d.cities}
                     rowHref={r => '/stock/' + r.id}
                     footer={
                       <tr>
-                        <td colSpan={2}><strong>Итого ({number(d.cities.length)} склад.)</strong></td>
+                        <td colSpan={2}><strong>Итого ({number(d.cities.length)} складов)</strong></td>
                         <td className="right" data-label="Комплектов"><strong>{qty(d.quantity)}</strong></td>
                         <td className="right" data-label="Продаж"><strong>{number(d.documents)}</strong></td>
                         <td className="right" data-label="Доля"><strong>100%</strong></td>
@@ -822,13 +822,13 @@ function SalesOverview({regional = false}) {
                       {label: 'Учётная стоимость', align: 'right', cell: r => money(r.cost)}
                     ]}
                   />
-                )}
-              </>
-            )
-          }}
-        </Guard>
-      </Card>
-      <Card title="Журнал продаж">
+                </Section>
+              )}
+            </>
+          )
+        }}
+      </Guard>
+      <Section title="Журнал продаж">
         <DocumentTable
           kind="sale"
           regional={regional}
@@ -839,7 +839,7 @@ function SalesOverview({regional = false}) {
           request={docsRequest}
           {...data}
         />
-      </Card>
+      </Section>
     </>
   )
 }
@@ -947,7 +947,7 @@ function WarehouseAccess({grant, setGrant}) {
           && matchesSearch(filters.search, p.name, p.email, p.city)
         )
         return (
-          <Card title="Назначения">
+          <Section title="Назначения">
             <RegistryTools state={state} total={filtered.length} placeholder="Сотрудник, почта или город">
               <Field label="Склад" wide>
                 <Select
@@ -1022,7 +1022,7 @@ function WarehouseAccess({grant, setGrant}) {
                 }}
               />
             )}
-          </Card>
+          </Section>
         )
       }}
     </Guard>
@@ -1131,9 +1131,9 @@ function TransactionLines({lines, setLines, items, mode, onAddMaterial}) {
         )
       })}
       {(canAddLine || (receipt && onAddMaterial)) && (
-        <div className="left-actions" style={{flexWrap: 'wrap'}}>
+        <div className="action-pair">
           {canAddLine && <Button onClick={add}>Добавить позицию</Button>}
-          {receipt && onAddMaterial && <Button kind="secondary" onClick={onAddMaterial}>+ Новый материал</Button>}
+          {receipt && onAddMaterial && <Button kind="secondary" onClick={onAddMaterial}>Новый материал</Button>}
         </div>
       )}
     </div>
@@ -1257,7 +1257,8 @@ function TransactionEditor({mode, document, inventory, initialSaleWarehouse}) {
           : 'Иваново · склад готовой продукции') + ' · ' + dayText(day)}
       actions={document && <Status value={document.status}/>}
     >
-      <Card title={sale ? 'Товар и оплата' : receipt ? 'Поступление от поставщика' : 'Маршрут и товары'}>
+      <Section title={sale ? 'Товар и оплата' : receipt ? 'Поступление от поставщика' : 'Маршрут и товары'}>
+        <div className="surface-panel">
         <form
           id={formId}
           className="document-form"
@@ -1403,7 +1404,7 @@ function TransactionEditor({mode, document, inventory, initialSaleWarehouse}) {
           </Field>
 
           <ErrorBox error={state.error}/>
-          <ActionRow>
+          <div className="action-row desktop-form-actions">
             <Button className="push-left" to={back}>Отмена</Button>
             {receipt && <Button type="submit" value="draft" disabled={state.busy}>Сохранить черновик</Button>}
             <Button
@@ -1416,9 +1417,10 @@ function TransactionEditor({mode, document, inventory, initialSaleWarehouse}) {
             {document && !receipt && (
               <Button type="submit" value="send" kind="primary" disabled={state.busy}>Подтвердить отправку</Button>
             )}
-          </ActionRow>
+          </div>
         </form>
-      </Card>
+        </div>
+      </Section>
 
       <div className="mobile-sticky-bar">
         <div className="mobile-sticky-summary">
@@ -1529,6 +1531,7 @@ function DocumentView({d}) {
             </div>
           )}
         <Table
+          flush
           rows={d.lines}
           label={sale ? 'Товары продажи' : 'Товары документа'}
           columns={[
@@ -1559,11 +1562,11 @@ function DocumentView({d}) {
         {canReceive && (
           <p className="inline-note info">Сверьте количество каждой позиции перед подтверждением приёмки.</p>
         )}
-        <ActionRow>
+        <div className={'action-row' + (canReceive ? ' desktop-form-actions' : '')}>
           <Button to={back} className="push-left">Назад</Button>
           {sale && <Button onClick={() => window.print()}>Распечатать</Button>}
           {canReceive && <Button kind="primary" onClick={() => setReceiveConfirm(true)}>Подтвердить получение</Button>}
-        </ActionRow>
+        </div>
       </Card>
       <DocumentHistory document={d} hideCost={regional}/>
       {canReceive && (
@@ -1651,7 +1654,7 @@ export function RawMaterial({id}) {
         if (!material) return <ErrorBox error="Материал не найден."/>
         return (
           <Page title={material.name} subtitle={'Склад сырья · остатки на ' + dayText(today)}>
-            <Card title="Остаток материала">
+            <Section title="Остаток материала">
               <Table
                 label="Остаток материала"
                 rows={[material]}
@@ -1665,10 +1668,10 @@ export function RawMaterial({id}) {
                   {label: 'Учётная стоимость', align: 'right', cell: r => money(r.value)}
                 ]}
               />
-            </Card>
-            <Card title="Движения материала">
+            </Section>
+            <Section title="Движения материала">
               <StockHistory id={1} material={id}/>
-            </Card>
+            </Section>
             <div className="left-actions">
               <Button to="/stock/1">Назад на склад</Button>
             </div>

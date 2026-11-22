@@ -236,7 +236,9 @@ export function SearchPicker({
           }
         }}
       >
-        <span aria-hidden="true" className="picker-chevron" />
+        <svg className="select-chevron" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m4 6 4 4 4-4" />
+        </svg>
       </button>
       {open && createPortal(
         <div

@@ -1,5 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
-  <rect width="512" height="512" rx="112" fill="#723CEB"/>
-  <path d="M112 268L256 142L400 268V384C400 397.255 389.255 408 376 408H136C122.745 408 112 397.255 112 384V268Z" stroke="#FFFFFF" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M204 408V296H308V408" stroke="#FFFFFF" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="sf-bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7c42f5"/>
+      <stop offset="52%" stop-color="#692ee6"/>
+      <stop offset="100%" stop-color="#4e1cbd"/>
+    </linearGradient>
+    <mask id="sf-loop-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M12 52L52 12" stroke="#000" stroke-width="11.5" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <rect width="64" height="64" rx="14.5" fill="url(#sf-bg)"/>
+  <g mask="url(#sf-loop-cut)">
+    <rect x="13" y="21.5" width="38" height="21" rx="10.5" stroke="#fff" stroke-width="5.6" transform="rotate(45 32 32)"/>
+  </g>
+  <g transform="rotate(-45 32 32)">
+    <path
+      fill-rule="evenodd"
+      clip-rule="evenodd"
+      d="M11.2 30.6A1.45 1.45 0 0 0 11.2 33.4L51.4 36.6A4.6 4.6 0 0 0 51.4 27.4L11.2 30.6ZM46.4 30.4H51.6A1.6 1.6 0 0 1 51.6 33.6H46.4A1.6 1.6 0 0 1 46.4 30.4Z"
+      fill="#fff"
+    />
+  </g>
 </svg>

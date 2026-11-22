@@ -450,6 +450,74 @@ export function Page({ title, subtitle, actions, children }) {
   )
 }
 
+export function BrandLogo({ size = 32, className = '', ...props }) {
+  const uid = useId()
+  const gradId = `sf-logo-grad-${uid}`
+  const maskId = `sf-logo-mask-${uid}`
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 64 64"
+      fill="none"
+      aria-hidden="true"
+      className={'brand-logo' + (className ? ' ' + className : '')}
+      {...props}
+    >
+      <defs>
+        <linearGradient id={gradId} x1="4" y1="2" x2="60" y2="62" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#7f46fa" />
+          <stop offset="55%" stopColor="#723ceb" />
+          <stop offset="100%" stopColor="#4f1dc0" />
+        </linearGradient>
+        <mask id={maskId}>
+          <rect x="0" y="0" width="64" height="64" fill="#fff" />
+          <rect x="41.2" y="30.2" width="8.6" height="3.6" rx="1.8" fill="#000" />
+        </mask>
+      </defs>
+      <rect x="0" y="0" width="64" height="64" rx="15" fill={`url(#${gradId})`} />
+      <g transform="rotate(-45 32 32)">
+        <path
+          d="M23 25.5V20a9 9 0 0 1 18 0v5.5"
+          stroke="#ffffff"
+          strokeWidth="5.8"
+          strokeLinecap="butt"
+          fill="none"
+        />
+        <path
+          d="M41 38.5V44a9 9 0 0 1-18 0v-5.5"
+          stroke="#ffffff"
+          strokeWidth="5.8"
+          strokeLinecap="butt"
+          fill="none"
+        />
+        <path
+          d="M11.2 30.8 48.2 27.6a4.4 4.4 0 1 1 0 8.8l-37-3.2a1.25 1.25 0 0 1 0-2.4Z"
+          fill="#ffffff"
+          mask={`url(#${maskId})`}
+        />
+      </g>
+    </svg>
+  )
+}
+
+export function Section({ title, subtitle, actions, className = '', children }) {
+  return (
+    <section className={'section-block' + (className ? ' ' + className : '')}>
+      {(title || subtitle || actions) && (
+        <header className="section-head">
+          <div className="section-head-copy">
+            {title && <h2>{title}</h2>}
+            {subtitle && <p>{subtitle}</p>}
+          </div>
+          {actions && <div className="actions">{actions}</div>}
+        </header>
+      )}
+      {children}
+    </section>
+  )
+}
+
 export function Card({ title, subtitle, actions, className = '', children }) {
   return (
     <section className={'card' + (className ? ' ' + className : '')}>
@@ -1133,7 +1201,11 @@ export function DateControl({
             <path d="M3 8.5h14M7 2.8v3M13 2.8v3" />
           </svg>
         )}
-        {inline && <i aria-hidden="true" />}
+        {inline && (
+          <svg className="select-chevron" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m4 6 4 4 4-4" />
+          </svg>
+        )}
       </button>
       {!disabled && !readOnly && (
         <input
@@ -1435,6 +1507,7 @@ export function Table({
   rowKey,
   rowHref,
   hasPager = false,
+  flush = false,
   mobileCards = true,
   footer = null,
   className = '',
@@ -1452,7 +1525,7 @@ export function Table({
   }
 
   return (
-    <div className={'table-frame' + (hasPager ? ' has-pagination' : '') + (mobileCards ? ' mobile-cards' : '') + (className ? ' ' + className : '')}>
+    <div className={'table-frame' + (flush ? ' is-flush' : '') + (hasPager ? ' has-pagination' : '') + (mobileCards ? ' mobile-cards' : '') + (className ? ' ' + className : '')}>
       <div className="table-scroll" role="region" aria-label={label} tabIndex={0}>
         <table aria-label={label}>
           <colgroup>
@@ -1530,15 +1603,15 @@ export function Pager({ page, size = 15, total, change, onSizeChange, pageSizes 
       <div className="pager is-compact">
         <span className="pager-count" role="status">
           {total <= size
-            ? number(total)
-            : number(from) + '–' + number(to) + ' / ' + number(total)}
+            ? 'Всего ' + number(total)
+            : number(from) + '–' + number(to) + ' из ' + number(total)}
         </span>
         {end > 1 && (
           <div className="actions">
             <Button className="pager-btn" aria-label="Предыдущая страница" disabled={safePage <= 1} onClick={() => change(safePage - 1)}>
               ‹
             </Button>
-            <span className="pager-pages">Стр. {number(safePage)} / {number(end)}</span>
+            <span className="pager-pages">{number(safePage)} из {number(end)}</span>
             <Button className="pager-btn" aria-label="Следующая страница" disabled={safePage >= end} onClick={() => change(safePage + 1)}>
               ›
             </Button>
@@ -1661,27 +1734,26 @@ function popupContains(root, target) {
 
 export function QuickFilters({ active = false, activeCount = 0, label = 'Быстрые фильтры', onReset, hasActive, className = '', children }) {
   const panelId = useId()
-  const disclosure = useRef(null)
+  const rootRef = useRef(null)
+  const triggerRef = useRef(null)
   const panelRef = useRef(null)
   const isMobile = useIsMobile(768)
-  const [mobileOpen, setMobileOpen] = useState(false)
+  const [open, setOpen] = useState(false)
   const [alignRight, setAlignRight] = useState(false)
 
   useEffect(() => {
-    if (!isMobile) setMobileOpen(false)
+    setOpen(false)
   }, [isMobile])
 
-  function closePanel() {
-    if (disclosure.current?.open) {
-      disclosure.current.open = false
-      disclosure.current.querySelector('summary')?.focus({ preventScroll: true })
-    }
-  }
+  const closePanel = useCallback((restoreFocus = false) => {
+    setOpen(false)
+    if (restoreFocus) triggerRef.current?.focus({ preventScroll: true })
+  }, [])
 
   const placePanel = useCallback(() => {
-    const el = disclosure.current
+    const el = rootRef.current
     const panel = panelRef.current
-    if (!el || !el.open || !panel) return
+    if (!el || !panel) return
     const triggerRect = el.getBoundingClientRect()
     const panelWidth = panel.offsetWidth || 360
     const overflowsRight = triggerRect.left + panelWidth > window.innerWidth - 16
@@ -1689,52 +1761,58 @@ export function QuickFilters({ active = false, activeCount = 0, label = 'Быс�
     setAlignRight(overflowsRight && fitsRightAligned)
   }, [])
 
+  useLayoutEffect(() => {
+    if (!open || isMobile) return undefined
+    placePanel()
+    window.addEventListener('resize', placePanel)
+    return () => window.removeEventListener('resize', placePanel)
+  }, [open, isMobile, placePanel])
+
   useEffect(() => {
-    if (isMobile) return undefined
-    const element = disclosure.current
+    if (!open || isMobile) return undefined
+    const element = rootRef.current
     if (!element) return undefined
     const outside = event => {
-      if (element.open && !popupContains(element, event.target)) element.open = false
+      if (!popupContains(element, event.target)) setOpen(false)
     }
     const escape = event => {
-      if (!element.open || event.key !== 'Escape' || event.defaultPrevented) return
+      if (event.key !== 'Escape' || event.defaultPrevented) return
       if (element.querySelector('[role="combobox"][aria-expanded="true"], [aria-haspopup][aria-expanded="true"]')) return
-      const shouldFocusSummary = popupContains(element, event.target)
+      if (document.querySelector('[data-picker-portal]')) return
+      const shouldFocusTrigger = popupContains(element, event.target)
       event.preventDefault()
-      element.open = false
-      if (shouldFocusSummary) element.querySelector('summary')?.focus({ preventScroll: true })
+      closePanel(shouldFocusTrigger)
     }
     document.addEventListener('pointerdown', outside, true)
     document.addEventListener('focusin', outside)
     document.addEventListener('keydown', escape)
-    window.addEventListener('resize', placePanel)
     return () => {
       document.removeEventListener('pointerdown', outside, true)
       document.removeEventListener('focusin', outside)
       document.removeEventListener('keydown', escape)
-      window.removeEventListener('resize', placePanel)
     }
-  }, [isMobile, placePanel])
+  }, [open, isMobile, closePanel])
 
   const count = activeCount > 0 ? activeCount : (active ? 1 : 0)
 
   if (isMobile) {
     return (
-      <div className={'quick-filters' + (className ? ' ' + className : '')}>
+      <div ref={rootRef} className={'quick-filters' + (className ? ' ' + className : '')} data-open={open || undefined}>
         <button
+          ref={triggerRef}
           type="button"
-          className="button secondary quick-filters-btn"
-          aria-expanded={mobileOpen}
-          aria-controls={mobileOpen ? panelId : undefined}
-          onClick={() => setMobileOpen(true)}
+          className="button secondary quick-filters-trigger quick-filters-btn"
+          aria-expanded={open}
+          aria-controls={open ? panelId : undefined}
+          onClick={() => setOpen(true)}
         >
           <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14l-5.5 6.5v4L8.5 16v-5.5L3 4Z" /></svg>
           <span>{label}</span>
           {count > 0 && <span className="filter-count" aria-label="Применены фильтры">{activeCount > 0 ? activeCount : ''}</span>}
         </button>
         <Sheet
-          open={mobileOpen}
-          onClose={() => setMobileOpen(false)}
+          open={open}
+          onClose={() => closePanel(false)}
           title={label}
           footer={
             <>
@@ -1743,7 +1821,7 @@ export function QuickFilters({ active = false, activeCount = 0, label = 'Быс�
                   Сбросить
                 </Button>
               )}
-              <Button kind="primary" onClick={() => setMobileOpen(false)}>
+              <Button kind="primary" onClick={() => closePanel(false)}>
                 Готово
               </Button>
             </>
@@ -1758,30 +1836,35 @@ export function QuickFilters({ active = false, activeCount = 0, label = 'Быс�
   }
 
   return (
-    <details
-      ref={disclosure}
-      className={'quick-filters' + (className ? ' ' + className : '')}
-      onToggle={e => { if (e.currentTarget.open) placePanel() }}
-    >
-      <summary className="button secondary" aria-controls={panelId}>
-        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14l-5.5 6.5v4L8.5 16v-5.5L3 4Z" /></svg>
+    <div ref={rootRef} className={'quick-filters' + (className ? ' ' + className : '')} data-open={open || undefined}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="button secondary quick-filters-trigger"
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        onClick={() => setOpen(o => !o)}
+      >
+        <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14l-5.5 6.5v4L8.5 16v-5.5L3 4Z" /></svg>
         <span>{label}</span>
         {count > 0 && <span className="filter-count" aria-label="Применены фильтры">{activeCount > 0 ? activeCount : ''}</span>}
-      </summary>
-      <div id={panelId} ref={panelRef} className={'quick-panel' + (alignRight ? ' quick-panel-right' : '')}>
-        {children}
-        <div className="quick-panel-actions">
-          {onReset && (
-            <Button kind="ghost" size="small" disabled={!hasActive} onClick={onReset}>
-              Сбросить
+      </button>
+      {open && (
+        <div id={panelId} ref={panelRef} role="dialog" aria-label={label} className={'quick-panel' + (alignRight ? ' quick-panel-right' : '')}>
+          {children}
+          <div className="quick-panel-actions">
+            {onReset && (
+              <Button kind="ghost" size="small" disabled={!hasActive} onClick={onReset}>
+                Сбросить
+              </Button>
+            )}
+            <Button kind="secondary" size="small" onClick={() => closePanel(true)}>
+              Готово
             </Button>
-          )}
-          <Button kind="secondary" size="small" onClick={closePanel}>
-            Готово
-          </Button>
+          </div>
         </div>
-      </div>
-    </details>
+      )}
+    </div>
   )
 }
 

@@ -1,9 +1,10 @@
 import React, { useEffect, useId, useMemo, useState } from 'react'
 import {
-  ActionRow, Button, Card, DateControl, DateRange, Details, Dialog, Download, ErrorBox,
-  Field, FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Select, Status, Table, Tabs,
-  api, dayText, go, href, itemText, matchesSearch, money, monthText, number, qty,
-  roleCanWrite, routeWith, stages, useAction, useFilters, useRemote, useToast, useWorkspace
+  ActionRow, Button, DateControl, DateRange, Details, Dialog, Download, ErrorBox,
+  Field, FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Section, Select,
+  Status, Table, Tabs, api, dayText, go, href, itemText, matchesSearch, money, monthText,
+  number, qty, roleCanWrite, routeWith, stages, useAction, useFilters, useRemote,
+  useToast, useWorkspace
 } from './ui'
 import { PasswordInput, SearchPicker } from './pickers'
 
@@ -64,7 +65,7 @@ function formatSignedMoney(delta) {
   return `${sign}${money(Math.abs(delta))}`
 }
 
-function LocalPager({ rows, columns, page, setPage, label, empty, footer, rowKey, rowHref }) {
+function LocalPager({ rows, columns, page, setPage, label, empty, footer, rowKey, rowHref, flush = false }) {
   const [size, setSize] = useState(15)
   const maxPage = Math.max(1, Math.ceil(rows.length / size))
   const safePage = Math.min(page, maxPage)
@@ -78,6 +79,7 @@ function LocalPager({ rows, columns, page, setPage, label, empty, footer, rowKey
         footer={footer}
         rowKey={rowKey}
         rowHref={rowHref}
+        flush={flush}
         hasPager={rows.length > 0}
       />
       <Pager
@@ -115,57 +117,55 @@ export function Catalog() {
       subtitle="Модели, размеры, спецификации материалов и сдельные расценки"
       actions={roleCanWrite(user) && <Button kind="primary" to="/catalog/new">Добавить изделие</Button>}
     >
-      <Card>
-        <RegistryTools state={state} total={rows.length} placeholder="Модель, артикул, размер или категория">
-          {categories.length > 1 && (
-            <Field label="Категория" wide>
-              <Select
-                placeholder="Все категории"
-                entries={categories}
-                value={filters.category}
-                onChange={e => change('category', e.target.value)}
-              />
-            </Field>
-          )}
-          <Field label="Размер" wide>
+      <RegistryTools state={state} total={rows.length} placeholder="Модель, артикул, размер или категория">
+        {categories.length > 1 && (
+          <Field label="Категория" wide>
             <Select
-              placeholder="Все размеры"
-              entries={sizes}
-              value={filters.size}
-              onChange={e => change('size', e.target.value)}
+              placeholder="Все категории"
+              entries={categories}
+              value={filters.category}
+              onChange={e => change('category', e.target.value)}
             />
           </Field>
-        </RegistryTools>
-        <LocalPager
-          page={page}
-          setPage={setPage}
-          label="Изделия и нормы"
-          empty="Изделия по этому запросу не найдены"
-          rows={rows}
-          rowHref={r => '/catalog/' + r.id}
-          columns={[
-            {
-              label: 'Изделие',
-              primary: true,
-              cell: r => (
-                <>
-                  <a href={href('/catalog/' + r.id)}>{r.name}</a>
-                  {r.category && <small className="cell-secondary">{r.category}</small>}
-                </>
-              )
-            },
-            { label: 'Размер', cell: r => r.size },
-            { label: 'Артикул', cell: r => r.sku },
-            { label: 'Спецификация', cell: r => (r.version ? 'Версия ' + r.version : '—') },
-            { label: 'Цена продажи', align: 'right', cell: r => money(r.price) },
-            {
-              label: 'Статус',
-              align: 'after-number',
-              cell: () => <Status value="posted" label="Действует" />
-            }
-          ]}
-        />
-      </Card>
+        )}
+        <Field label="Размер" wide>
+          <Select
+            placeholder="Все размеры"
+            entries={sizes}
+            value={filters.size}
+            onChange={e => change('size', e.target.value)}
+          />
+        </Field>
+      </RegistryTools>
+      <LocalPager
+        page={page}
+        setPage={setPage}
+        label="Изделия и нормы"
+        empty="Изделия по этому запросу не найдены"
+        rows={rows}
+        rowHref={r => '/catalog/' + r.id}
+        columns={[
+          {
+            label: 'Изделие',
+            primary: true,
+            cell: r => (
+              <>
+                <a href={href('/catalog/' + r.id)}>{r.name}</a>
+                {r.category && <small className="cell-secondary">{r.category}</small>}
+              </>
+            )
+          },
+          { label: 'Размер', cell: r => r.size },
+          { label: 'Артикул', cell: r => r.sku },
+          { label: 'Спецификация', cell: r => (r.version ? 'Версия ' + r.version : '—') },
+          { label: 'Цена продажи', align: 'right', cell: r => money(r.price) },
+          {
+            label: 'Статус',
+            align: 'after-number',
+            cell: () => <Status value="posted" label="Действует" />
+          }
+        ]}
+      />
     </Page>
   )
 }
@@ -265,7 +265,7 @@ function SpecEditor({ detail, close, done }) {
       : []
   )
   const [createdMaterials, setCreatedMaterials] = useState([])
-  const [newMaterialStage, setNewMaterialStage] = useState(null)
+  const [newMaterialOpen, setNewMaterialOpen] = useState(false)
 
   const rawItems = useMemo(() => {
     const map = new Map()
@@ -293,14 +293,14 @@ function SpecEditor({ detail, close, done }) {
     setCreatedMaterials(list => [...list, created])
     ws.refresh()
     setNorms(list => {
-      const emptyIdx = list.findIndex(n => !n.item_id && (!newMaterialStage || n.stage === newMaterialStage))
+      const emptyIdx = list.findIndex(n => !n.item_id)
       if (emptyIdx >= 0) {
         return list.map((n, idx) => (idx === emptyIdx ? { ...n, item_id: created.id } : n))
       }
       const nextKey = Math.max(-1, ...list.map(n => n.key)) + 1
-      return [...list, { key: nextKey, item_id: created.id, stage: newMaterialStage || 'cut', quantity: 1 }]
+      return [...list, { key: nextKey, item_id: created.id, stage: 'cut', quantity: 1 }]
     })
-    setNewMaterialStage(null)
+    setNewMaterialOpen(false)
   }
 
   const form = (
@@ -359,9 +359,9 @@ function SpecEditor({ detail, close, done }) {
 
       <h3>Нормы материалов на 1 комплект</h3>
       {norms.length === 0 ? (
-        <div className="inline-note info">
+        <p className="muted">
           Материалы не указаны — списание сырья не выполняется. Можно добавить сколько угодно материалов на любой этап или сохранить спецификацию без сырья.
-        </div>
+        </p>
       ) : (
         <div className="spec-lines">
           {norms.map(n => {
@@ -414,14 +414,10 @@ function SpecEditor({ detail, close, done }) {
         </div>
       )}
 
-      <div className="left-actions">
-        {production.map(([stageCode, stageLabel]) => (
-          <Button key={stageCode} onClick={() => addNorm(stageCode)}>
-            + {stageLabel}
-          </Button>
-        ))}
-        <Button kind="secondary" onClick={() => setNewMaterialStage('cut')}>
-          + Новый материал
+      <div className="action-pair">
+        <Button onClick={() => addNorm('cut')}>Добавить материал</Button>
+        <Button kind="secondary" onClick={() => setNewMaterialOpen(true)}>
+          Новый материал
         </Button>
       </div>
 
@@ -443,7 +439,11 @@ function SpecEditor({ detail, close, done }) {
         ))}
       </div>
       <ErrorBox error={state.error} />
-      {!detail && <FormActions busy={state.busy} cancel={close} submit="Создать изделие" />}
+      {!detail && (
+        <div className="desktop-form-actions">
+          <FormActions busy={state.busy} cancel={close} submit="Создать изделие" />
+        </div>
+      )}
     </form>
   )
 
@@ -477,9 +477,9 @@ function SpecEditor({ detail, close, done }) {
           </div>
         </>
       )}
-      {newMaterialStage !== null && (
+      {newMaterialOpen && (
         <NewMaterialDialog
-          close={() => setNewMaterialStage(null)}
+          close={() => setNewMaterialOpen(false)}
           done={handleMaterialCreated}
         />
       )}
@@ -530,7 +530,7 @@ function ProductView({ detail, selected, refresh }) {
     ...(compareTarget
       ? [
           {
-            label: 'Было (в. ' + compareTarget.version + ')',
+            label: 'Было (версия ' + compareTarget.version + ')',
             align: 'right',
             cell: r => {
               const prev = normMap.get(`${r.stage}:${r.item_id}`)
@@ -565,7 +565,7 @@ function ProductView({ detail, selected, refresh }) {
     ...(compareTarget
       ? [
           {
-            label: 'Было (в. ' + compareTarget.version + ')',
+            label: 'Было (версия ' + compareTarget.version + ')',
             align: 'right',
             cell: r => money(compareTarget.rates[r.id] || 0)
           },
@@ -607,106 +607,105 @@ function ProductView({ detail, selected, refresh }) {
         ]}
       />
 
-      <Card>
-        <div className="toolbar spec-toolbar">
-          <Field label="Версия спецификации" className="spec-version-field">
-            <Select
-              value={v?.id || ''}
-              onChange={e => {
-                setVersion(e.target.value)
-                if (String(compareId) === String(e.target.value)) setCompareId('')
-              }}
-              entries={versions.map((ver, idx) => [
-                ver.id,
-                'Версия ' + ver.version + ' · ' + dayText(ver.effective) + (idx === 0 ? ' (актуальная)' : '')
-              ])}
-            />
-          </Field>
-          {versions.length > 1 && (
-            <>
-              <div className="spec-nav-buttons">
-                <Button
-                  size="small"
-                  disabled={!olderVersion}
-                  onClick={() => {
-                    if (olderVersion) setVersion(String(olderVersion.id))
-                  }}
-                >
-                  ← Предыдущая
-                </Button>
-                <Button
-                  size="small"
-                  disabled={!newerVersion}
-                  onClick={() => {
-                    if (newerVersion) setVersion(String(newerVersion.id))
-                  }}
-                >
-                  Следующая →
-                </Button>
-              </div>
-              <Field label="Сравнить с версией" className="spec-version-field">
-                <Select
-                  placeholder="Без сравнения"
-                  value={compareTarget ? String(compareTarget.id) : ''}
-                  onChange={e => setCompareId(e.target.value)}
-                  entries={versions
-                    .filter(ver => ver.id !== v?.id)
-                    .map(ver => [
-                      ver.id,
-                      'Версия ' +
-                        ver.version +
-                        ' · ' +
-                        dayText(ver.effective) +
-                        (ver.id === versions[0].id ? ' (актуальная)' : '')
-                    ])}
-                />
-              </Field>
-            </>
-          )}
-        </div>
-
-        {v && !isLatest && (
-          <div className="inline-note info version-banner">
-            <span>
-              Вы просматриваете историческую версию {v.version} (действует с {dayText(v.effective)}).
-            </span>
-            <Button size="small" onClick={() => setVersion(String(versions[0].id))}>
-              Перейти к актуальной (версия {versions[0].version})
-            </Button>
-          </div>
-        )}
-
-        <Tabs
-          items={[
-            ['materials', 'Материалы'],
-            ['rates', 'Техкарта и расценки']
-          ]}
-          value={tab}
-          onChange={setTab}
-        />
-
-        {v && tab === 'materials' && (
+      <div className="toolbar spec-toolbar">
+        <Field label="Версия спецификации" className="spec-version-field">
+          <Select
+            value={v?.id || ''}
+            onChange={e => {
+              setVersion(e.target.value)
+              if (String(compareId) === String(e.target.value)) setCompareId('')
+            }}
+            entries={versions.map((ver, idx) => [
+              ver.id,
+              'Версия ' + ver.version + ' · ' + dayText(ver.effective) + (idx === 0 ? ' (актуальная)' : '')
+            ])}
+          />
+        </Field>
+        {versions.length > 1 && (
           <>
-            <h3>Нормы на один комплект</h3>
-            <Table
-              label="Нормы материалов"
-              rows={v.norms}
-              empty="Материалы не указаны — списание сырья для этой версии не выполняется"
-              rowKey={r => r.stage + '-' + r.item_id}
-              rowHref={r => '/stock/1/items/' + r.item_id}
-              columns={materialColumns}
-            />
-            {compareTarget && removedNorms.length > 0 && (
-              <div className="inline-note">
-                Исключены по сравнению с версией {compareTarget.version}:{' '}
-                {removedNorms.map(n => `${stages[n.stage]} — ${n.name} (${qty(n.quantity)} ${n.unit})`).join(', ')}.
-              </div>
-            )}
-            <p className="muted">Проведённые отчёты сохраняют нормы своей версии спецификации.</p>
+            <div className="action-pair">
+              <Button
+                disabled={!olderVersion}
+                onClick={() => {
+                  if (olderVersion) setVersion(String(olderVersion.id))
+                }}
+              >
+                ← Предыдущая
+              </Button>
+              <Button
+                disabled={!newerVersion}
+                onClick={() => {
+                  if (newerVersion) setVersion(String(newerVersion.id))
+                }}
+              >
+                Следующая →
+              </Button>
+            </div>
+            <Field label="Сравнить с версией" className="spec-version-field">
+              <Select
+                placeholder="Без сравнения"
+                value={compareTarget ? String(compareTarget.id) : ''}
+                onChange={e => setCompareId(e.target.value)}
+                entries={versions
+                  .filter(ver => ver.id !== v?.id)
+                  .map(ver => [
+                    ver.id,
+                    'Версия ' +
+                      ver.version +
+                      ' · ' +
+                      dayText(ver.effective) +
+                      (ver.id === versions[0].id ? ' (актуальная)' : '')
+                  ])}
+              />
+            </Field>
           </>
         )}
+      </div>
 
-        {v && tab === 'rates' && (
+      {v && !isLatest && (
+        <div className="inline-note info version-banner">
+          <span>
+            Вы просматриваете историческую версию {v.version} (действует с {dayText(v.effective)}).
+          </span>
+          <Button size="small" onClick={() => setVersion(String(versions[0].id))}>
+            Перейти к актуальной (версия {versions[0].version})
+          </Button>
+        </div>
+      )}
+
+      <Tabs
+        items={[
+          ['materials', 'Материалы'],
+          ['rates', 'Технологическая карта']
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+
+      {v && tab === 'materials' && (
+        <Section
+          title="Нормы на один комплект"
+          subtitle="Проведённые отчёты сохраняют нормы своей версии спецификации"
+        >
+          <Table
+            label="Нормы материалов"
+            rows={v.norms}
+            empty="Материалы не указаны — списание сырья для этой версии не выполняется"
+            rowKey={r => r.stage + '-' + r.item_id}
+            rowHref={r => '/stock/1/items/' + r.item_id}
+            columns={materialColumns}
+          />
+          {compareTarget && removedNorms.length > 0 && (
+            <div className="inline-note">
+              Исключены по сравнению с версией {compareTarget.version}:{' '}
+              {removedNorms.map(n => `${stages[n.stage]} — ${n.name} (${qty(n.quantity)} ${n.unit})`).join(', ')}.
+            </div>
+          )}
+        </Section>
+      )}
+
+      {v && tab === 'rates' && (
+        <Section title="Технологическая карта и расценки">
           <Table
             label="Технологическая карта и расценки"
             rows={rateRows}
@@ -721,7 +720,7 @@ function ProductView({ detail, selected, refresh }) {
                 </td>
                 {compareTarget && (
                   <>
-                    <td className="right" data-label={'Было (в. ' + compareTarget.version + ')'}>
+                    <td className="right" data-label={'Было (версия ' + compareTarget.version + ')'}>
                       {money(compareTotalRates)}
                     </td>
                     <td className="right" data-label="Разница">
@@ -742,8 +741,8 @@ function ProductView({ detail, selected, refresh }) {
               </tr>
             }
           />
-        )}
-      </Card>
+        </Section>
+      )}
 
       {open && roleCanWrite(user) && (
         <SpecEditor
@@ -766,8 +765,8 @@ export function ProductDetail({ id, selected }) {
   const request = useRemote(id ? '/catalog/' + id : null)
   if (!id) {
     return roleCanWrite(ws.user) ? (
-      <Page title="Добавить изделие">
-        <Card title="Изделие и первая спецификация">
+      <Page title="Добавить изделие" subtitle="Карточка модели и первая версия спецификации">
+        <div className="surface-panel">
           <SpecEditor
             close={() => go('/catalog')}
             done={r => {
@@ -775,15 +774,15 @@ export function ProductDetail({ id, selected }) {
               go('/catalog/' + r.id)
             }}
           />
-        </Card>
+        </div>
       </Page>
     ) : (
-      <Card className="forbidden-card">
+      <div className="surface-panel forbidden-card">
         <ErrorBox error="Создание изделий доступно только администратору и бухгалтеру." />
         <ActionRow>
           <Button to="/catalog">Вернуться в каталог</Button>
         </ActionRow>
-      </Card>
+      </div>
     )
   }
   return (
@@ -822,47 +821,45 @@ export function People() {
       subtitle="Исполнители для учёта выработки и начислений"
       actions={roleCanWrite(user) && <Button kind="primary" onClick={() => setOpen(true)}>Добавить сотрудника</Button>}
     >
-      <Card>
-        <RegistryTools state={state} total={rows.length} placeholder="Имя или должность">
-          <Field label="Участок">
-            <Select
-              placeholder="Все участки"
-              entries={Object.entries(stages)}
-              value={filters.stage || ''}
-              onChange={e => change('stage', e.target.value)}
-            />
-          </Field>
-          <Field label="Статус">
-            <Select
-              placeholder="Все статусы"
-              entries={[
-                [1, 'Работает'],
-                [0, 'Не работает']
-              ]}
-              value={filters.status}
-              onChange={e => change('status', e.target.value)}
-            />
-          </Field>
-        </RegistryTools>
-        <LocalPager
-          rows={rows}
-          label="Сотрудники"
-          empty="Сотрудники по этому запросу не найдены"
-          page={page}
-          setPage={setPage}
-          rowHref={r => '/people/' + r.id}
-          columns={[
-            { label: 'Сотрудник', primary: true, cell: r => <a href={href('/people/' + r.id)}>{r.name}</a> },
-            { label: 'Должность', cell: r => r.position },
-            { label: 'Участок', cell: r => stages[r.stage] || r.stage },
-            { label: 'Дата приёма', cell: r => dayText(r.hired_on) },
-            {
-              label: 'Статус',
-              cell: r => <Status value={r.active ? 'posted' : 'inactive'} label={r.active ? 'Работает' : 'Не работает'} />
-            }
-          ]}
-        />
-      </Card>
+      <RegistryTools state={state} total={rows.length} placeholder="Имя или должность">
+        <Field label="Участок">
+          <Select
+            placeholder="Все участки"
+            entries={Object.entries(stages)}
+            value={filters.stage || ''}
+            onChange={e => change('stage', e.target.value)}
+          />
+        </Field>
+        <Field label="Статус">
+          <Select
+            placeholder="Все статусы"
+            entries={[
+              [1, 'Работает'],
+              [0, 'Не работает']
+            ]}
+            value={filters.status}
+            onChange={e => change('status', e.target.value)}
+          />
+        </Field>
+      </RegistryTools>
+      <LocalPager
+        rows={rows}
+        label="Сотрудники"
+        empty="Сотрудники по этому запросу не найдены"
+        page={page}
+        setPage={setPage}
+        rowHref={r => '/people/' + r.id}
+        columns={[
+          { label: 'Сотрудник', primary: true, cell: r => <a href={href('/people/' + r.id)}>{r.name}</a> },
+          { label: 'Должность', cell: r => r.position },
+          { label: 'Участок', cell: r => stages[r.stage] || r.stage },
+          { label: 'Дата приёма', cell: r => dayText(r.hired_on) },
+          {
+            label: 'Статус',
+            cell: r => <Status value={r.active ? 'posted' : 'inactive'} label={r.active ? 'Работает' : 'Не работает'} />
+          }
+        ]}
+      />
       {open && roleCanWrite(user) && (
         <StaffForm
           today={today}
@@ -981,110 +978,112 @@ export function StaffDetail({ id }) {
               />
             )}
 
-            <Card>
-              {works && (
-                <Tabs
-                  items={[
-                    ['wages', 'Выработка и начисления'],
-                    ['profile', 'Личные данные']
-                  ]}
-                  value={activeTab}
-                  onChange={setTab}
-                />
-              )}
+            {works && (
+              <Tabs
+                items={[
+                  ['wages', 'Выработка и начисления'],
+                  ['profile', 'Личные данные']
+                ]}
+                value={activeTab}
+                onChange={setTab}
+              />
+            )}
 
-              {activeTab === 'profile' && (
-                <>
-                  <Details
-                    values={[
-                      ['Имя', d.staff.name],
-                      ['Участок', stages[d.staff.stage] || d.staff.stage],
-                      ['Должность', d.staff.position],
-                      ['Дата приёма', dayText(d.staff.hired_on)],
-                      ...(works ? [['Форма оплаты', 'Сдельная']] : []),
-                      [
-                        'Статус',
-                        <Status
-                          value={d.staff.active ? 'posted' : 'inactive'}
-                          label={d.staff.active ? 'Работает' : 'Не работает'}
-                        />
-                      ]
-                    ]}
-                  />
-                  {!canWrite && isProductionWorker && (
-                    <>
-                      <div className="inline-note info">
-                        Фактическая выработка сотрудника отображается в проведённых сменных отчётах. Персональные начисления и расчётный листок доступны бухгалтеру и администратору.
-                      </div>
-                      <ActionRow>
-                        <Button to={routeWith('/reports', { stage: d.staff.stage })}>
-                          Открыть отчёты участка «{stages[d.staff.stage]}»
-                        </Button>
-                      </ActionRow>
-                    </>
-                  )}
-                </>
-              )}
-
-              {activeTab === 'wages' && works && (
-                <>
-                  <RegistryTools state={state} periodLabel total={d.rows.length}>
-                    <DateRange
-                      filters={filters}
-                      change={change}
-                      allowClear={false}
-                      onRangeChange={(start, end) => update({ start, end })}
+            {activeTab === 'profile' && (
+              <>
+                <Section title="Сведения о сотруднике">
+                  <div className="surface-panel">
+                    <Details
+                      values={[
+                        ['Имя', d.staff.name],
+                        ['Участок', stages[d.staff.stage] || d.staff.stage],
+                        ['Должность', d.staff.position],
+                        ['Дата приёма', dayText(d.staff.hired_on)],
+                        ...(works ? [['Форма оплаты', 'Сдельная']] : []),
+                        [
+                          'Статус',
+                          <Status
+                            value={d.staff.active ? 'posted' : 'inactive'}
+                            label={d.staff.active ? 'Работает' : 'Не работает'}
+                          />
+                        ]
+                      ]}
                     />
-                  </RegistryTools>
-                  <LocalPager
-                    rows={d.rows.map((r, i) => ({ ...r, id: r.id + '-' + r.item_id + '-' + i, doc_id: r.id }))}
-                    label="Начисления сотрудника"
-                    empty="За выбранный период начислений нет"
-                    page={page}
-                    setPage={setPage}
-                    rowHref={r => '/reports/' + r.doc_id}
-                    columns={[
-                      {
-                        label: 'Дата / документ',
-                        primary: true,
-                        cell: r => (
-                          <a href={href('/reports/' + r.doc_id)}>
-                            {dayText(r.date)} · {r.code}
-                          </a>
-                        )
-                      },
-                      { label: 'Изделие', cell: itemText },
-                      { label: 'Количество', align: 'right', cell: r => qty(r.quantity) },
-                      { label: 'Расценка', align: 'right', cell: r => money(r.rate) },
-                      { label: 'Начислено', align: 'right', cell: r => <strong>{money(r.amount)}</strong> }
-                    ]}
-                    footer={
-                      d.rows.length > 0 ? (
-                        <tr>
-                          <th scope="row" colSpan={2}>
-                            Итого за период
-                          </th>
-                          <td className="right" data-label="Выработка">
-                            <strong>{qty(quantity)} компл.</strong>
-                          </td>
-                          <td className="right" />
-                          <td className="right" data-label="Начислено">
-                            <strong>{money(amount)}</strong>
-                          </td>
-                        </tr>
-                      ) : null
-                    }
-                  />
-                  {d.rows.length > 0 && (
+                  </div>
+                </Section>
+                {!canWrite && isProductionWorker && (
+                  <>
+                    <div className="inline-note info">
+                      Фактическая выработка сотрудника отображается в проведённых сменных отчётах. Персональные начисления и расчётный листок доступны бухгалтеру и администратору.
+                    </div>
                     <ActionRow>
-                      <Download path={'/staff/' + id} options={filters}>
-                        Скачать расчёт
-                      </Download>
+                      <Button to={routeWith('/reports', { stage: d.staff.stage })}>
+                        Открыть отчёты участка «{stages[d.staff.stage]}»
+                      </Button>
                     </ActionRow>
-                  )}
-                </>
-              )}
-            </Card>
+                  </>
+                )}
+              </>
+            )}
+
+            {activeTab === 'wages' && works && (
+              <>
+                <RegistryTools state={state} periodLabel total={d.rows.length}>
+                  <DateRange
+                    filters={filters}
+                    change={change}
+                    allowClear={false}
+                    onRangeChange={(start, end) => update({ start, end })}
+                  />
+                </RegistryTools>
+                <LocalPager
+                  rows={d.rows.map((r, i) => ({ ...r, id: r.id + '-' + r.item_id + '-' + i, doc_id: r.id }))}
+                  label="Начисления сотрудника"
+                  empty="За выбранный период начислений нет"
+                  page={page}
+                  setPage={setPage}
+                  rowHref={r => '/reports/' + r.doc_id}
+                  columns={[
+                    {
+                      label: 'Дата / документ',
+                      primary: true,
+                      cell: r => (
+                        <a href={href('/reports/' + r.doc_id)}>
+                          {dayText(r.date)} · {r.code}
+                        </a>
+                      )
+                    },
+                    { label: 'Изделие', cell: itemText },
+                    { label: 'Количество', align: 'right', cell: r => qty(r.quantity) },
+                    { label: 'Расценка', align: 'right', cell: r => money(r.rate) },
+                    { label: 'Начислено', align: 'right', cell: r => <strong>{money(r.amount)}</strong> }
+                  ]}
+                  footer={
+                    d.rows.length > 0 ? (
+                      <tr>
+                        <th scope="row" colSpan={2}>
+                          Итого за период
+                        </th>
+                        <td className="right" data-label="Выработка">
+                          <strong>{qty(quantity)} компл.</strong>
+                        </td>
+                        <td className="right" />
+                        <td className="right" data-label="Начислено">
+                          <strong>{money(amount)}</strong>
+                        </td>
+                      </tr>
+                    ) : null
+                  }
+                />
+                {d.rows.length > 0 && (
+                  <ActionRow>
+                    <Download path={'/staff/' + id} options={filters}>
+                      Скачать расчёт
+                    </Download>
+                  </ActionRow>
+                )}
+              </>
+            )}
 
             {open && canWrite && (
               <StaffForm
@@ -1146,32 +1145,34 @@ export function Payroll() {
               />
 
               {rows.length > 0 && !filters.stage && (
-                <Card title="Распределение начислений по этапам">
-                  <div className="output-chart">
-                    {byStage.map(s => {
-                      const share = totalAmount > 0 ? Math.round((s.amount / totalAmount) * 100) : 0
-                      return (
-                        <div className="bar-row" key={s.code}>
-                          <span>
-                            {s.label} ({number(s.count)})
-                          </span>
-                          <div className="bar-track" aria-hidden="true">
-                            <div
-                              className={'bar-fill ' + s.code}
-                              style={{ width: (totalAmount > 0 ? (s.amount / totalAmount) * 100 : 0) + '%' }}
-                            />
+                <Section title="Распределение начислений по этапам">
+                  <div className="surface-panel">
+                    <div className="output-chart">
+                      {byStage.map(s => {
+                        const share = totalAmount > 0 ? Math.round((s.amount / totalAmount) * 100) : 0
+                        return (
+                          <div className="bar-row" key={s.code}>
+                            <span>
+                              {s.label} ({number(s.count)})
+                            </span>
+                            <div className="bar-track" aria-hidden="true">
+                              <div
+                                className={'bar-fill ' + s.code}
+                                style={{ width: (totalAmount > 0 ? (s.amount / totalAmount) * 100 : 0) + '%' }}
+                              />
+                            </div>
+                            <strong>
+                              {money(s.amount)} · {share}%
+                            </strong>
                           </div>
-                          <strong>
-                            {money(s.amount)} · {share}%
-                          </strong>
-                        </div>
-                      )
-                    })}
+                        )
+                      })}
+                    </div>
                   </div>
-                </Card>
+                </Section>
               )}
 
-              <Card>
+              <Section title="Ведомость начислений">
                 <RegistryTools
                   state={state}
                   periodLabel
@@ -1222,7 +1223,7 @@ export function Payroll() {
                     <Download path="/payroll" options={filters} />
                   </ActionRow>
                 )}
-              </Card>
+              </Section>
             </>
           )
         }}
@@ -1262,115 +1263,113 @@ export function Month() {
         </Download>
       }
     >
-      <Card>
-        <div className="toolbar spec-toolbar">
-          <Field label="Месяц">
-            <DateControl
-              month
-              value={month}
-              min={minMonth}
-              max={maxMonth}
-              onChange={e => {
-                if (e.target.value) selection.change('month', e.target.value)
-              }}
-            />
-          </Field>
-          <div className="spec-nav-buttons">
-            <Button
-              size="small"
-              disabled={prevMonth < minMonth}
-              onClick={() => selection.change('month', prevMonth)}
-            >
-              ← Предыдущий
-            </Button>
-            <Button
-              size="small"
-              disabled={nextMonth > maxMonth}
-              onClick={() => selection.change('month', nextMonth)}
-            >
-              Следующий →
-            </Button>
-          </div>
+      <div className="toolbar spec-toolbar">
+        <Field label="Месяц">
+          <DateControl
+            month
+            value={month}
+            min={minMonth}
+            max={maxMonth}
+            onChange={e => {
+              if (e.target.value) selection.change('month', e.target.value)
+            }}
+          />
+        </Field>
+        <div className="action-pair">
+          <Button
+            disabled={prevMonth < minMonth}
+            onClick={() => selection.change('month', prevMonth)}
+          >
+            ← Предыдущий
+          </Button>
+          <Button
+            disabled={nextMonth > maxMonth}
+            onClick={() => selection.change('month', nextMonth)}
+          >
+            Следующий →
+          </Button>
         </div>
+      </div>
 
-        <Tabs
-          items={[
-            ['stock', 'Выпуск и остатки'],
-            ['cost', 'Себестоимость']
-          ]}
-          value={tab}
-          onChange={value => selection.change('tab', value)}
-        />
+      <Tabs
+        items={[
+          ['stock', 'Выпуск и остатки'],
+          ['cost', 'Себестоимость']
+        ]}
+        value={tab}
+        onChange={value => selection.change('tab', value)}
+      />
 
-        <Guard request={request}>
-          {d => {
-            const totalOpening = d.flows.reduce((s, r) => s + r.opening, 0)
-            const totalIncoming = d.flows.reduce((s, r) => s + r.incoming, 0)
-            const totalOutgoing = d.flows.reduce((s, r) => s + r.outgoing, 0)
-            const totalClosing = d.flows.reduce((s, r) => s + r.closing, 0)
-            const wipClosing = d.flows.filter(r => r.kind !== 'finished').reduce((s, r) => s + r.closing, 0)
-            const finishedClosing = d.flows.find(r => r.kind === 'finished')?.closing || 0
-            const maxFlow = Math.max(1, ...d.flows.flatMap(r => [r.incoming, r.outgoing, r.closing]))
+      <Guard request={request}>
+        {d => {
+          const totalOpening = d.flows.reduce((s, r) => s + r.opening, 0)
+          const totalIncoming = d.flows.reduce((s, r) => s + r.incoming, 0)
+          const totalOutgoing = d.flows.reduce((s, r) => s + r.outgoing, 0)
+          const totalClosing = d.flows.reduce((s, r) => s + r.closing, 0)
+          const wipClosing = d.flows.filter(r => r.kind !== 'finished').reduce((s, r) => s + r.closing, 0)
+          const finishedClosing = d.flows.find(r => r.kind === 'finished')?.closing || 0
+          const maxFlow = Math.max(1, ...d.flows.flatMap(r => [r.incoming, r.outgoing, r.closing]))
 
-            const costParts = [
-              { key: 'opening', label: 'НЗП на начало', value: d.opening, color: '#6b7280' },
-              { key: 'material', label: 'Материалы', value: d.material, color: 'var(--primary)' },
-              { key: 'wages', label: 'Сдельная оплата', value: d.wages, color: 'var(--link)' },
-              { key: 'overhead', label: 'Прочие затраты', value: d.overhead, color: '#c4832b' }
-            ]
-            const grossCost = costParts.reduce((s, p) => s + Math.max(0, p.value), 0)
-            const maxArticle = Math.max(1, ...accounting.map(([k]) => Math.abs(d[k] || 0)))
-            const avgUnitCost = d.completed > 0 ? Math.round((d.total * 1000) / d.completed) : null
+          const costParts = [
+            { key: 'opening', label: 'НЗП на начало', value: d.opening, color: '#6b7280' },
+            { key: 'material', label: 'Материалы', value: d.material, color: 'var(--primary)' },
+            { key: 'wages', label: 'Сдельная оплата', value: d.wages, color: 'var(--link)' },
+            { key: 'overhead', label: 'Прочие затраты', value: d.overhead, color: '#c4832b' }
+          ]
+          const grossCost = costParts.reduce((s, p) => s + Math.max(0, p.value), 0)
+          const maxArticle = Math.max(1, ...accounting.map(([k]) => Math.abs(d[k] || 0)))
+          const avgUnitCost = d.completed > 0 ? Math.round((d.total * 1000) / d.completed) : null
 
-            return tab === 'stock' ? (
-              <>
-                <MetricStrip
-                  items={[
-                    {
-                      label: 'Выпуск готовой продукции',
-                      value: qty(d.completed) + ' компл.',
-                      meta: 'Упаковано за ' + monthText(month).toLowerCase()
-                    },
-                    {
-                      label: 'НЗП на конец месяца',
-                      value: qty(wipClosing) + ' компл.',
-                      meta: 'Крой, пошив и упаковка'
-                    },
-                    {
-                      label: 'Готовая продукция на конец',
-                      value: qty(finishedClosing) + ' компл.',
-                      meta: 'Остаток на складе ГП (Иваново)'
-                    }
-                  ]}
-                />
+          return tab === 'stock' ? (
+            <>
+              <MetricStrip
+                items={[
+                  {
+                    label: 'Выпуск готовой продукции',
+                    value: qty(d.completed) + ' компл.',
+                    meta: 'Упаковано за ' + monthText(month).toLowerCase()
+                  },
+                  {
+                    label: 'НЗП на конец месяца',
+                    value: qty(wipClosing) + ' компл.',
+                    meta: 'Крой, пошив и упаковка'
+                  },
+                  {
+                    label: 'Готовая продукция на конец',
+                    value: qty(finishedClosing) + ' компл.',
+                    meta: 'Остаток на складе готовой продукции'
+                  }
+                ]}
+              />
 
-                <div className="cost-breakdown">
-                  <div className="chart-title">
-                    <h3>Движение по складам Иваново</h3>
-                    <span>приход / расход, компл.</span>
-                  </div>
-                  <div className="output-chart">
-                    {d.flows.map(r => (
-                      <div className="cost-row" key={r.id}>
-                        <a
-                          href={href('/stock/' + r.id + '?tab=history&start=' + monthStart + '&end=' + monthEnd)}
-                        >
-                          {r.name}
-                        </a>
-                        <div className="bar-track" aria-hidden="true">
-                          <div
-                            className={'bar-fill ' + (r.kind === 'finished' ? 'pack' : r.kind)}
-                            style={{ width: (r.incoming / maxFlow) * 100 + '%' }}
-                          />
+              <Section title="Движение по складам Иваново" subtitle="Приход и расход за месяц, комплектов">
+                <div className="surface-panel">
+                  <div className="cost-breakdown">
+                    <div className="output-chart">
+                      {d.flows.map(r => (
+                        <div className="cost-row" key={r.id}>
+                          <a
+                            href={href('/stock/' + r.id + '?tab=history&start=' + monthStart + '&end=' + monthEnd)}
+                          >
+                            {r.name}
+                          </a>
+                          <div className="bar-track" aria-hidden="true">
+                            <div
+                              className={'bar-fill ' + (r.kind === 'finished' ? 'pack' : r.kind)}
+                              style={{ width: (r.incoming / maxFlow) * 100 + '%' }}
+                            />
+                          </div>
+                          <strong className="right">
+                            +{qty(r.incoming)} / −{qty(r.outgoing)}
+                          </strong>
                         </div>
-                        <strong className="right">
-                          +{qty(r.incoming)} / −{qty(r.outgoing)}
-                        </strong>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 </div>
+              </Section>
 
+              <Section title="Выпуск и остатки по складам">
                 <Table
                   rows={d.flows}
                   label="Выпуск и остатки"
@@ -1403,99 +1402,101 @@ export function Month() {
                     </tr>
                   }
                 />
+              </Section>
 
-                <div className="inline-note info version-banner">
-                  <span>
-                    Склад сырья (5-й склад Иваново) учитывается в метрах и штуках на отдельном складе.
-                  </span>
-                  <a href={href('/stock/1?tab=history&start=' + monthStart + '&end=' + monthEnd)}>
-                    Движения сырья за {monthText(month).toLowerCase()} →
-                  </a>
-                </div>
-              </>
-            ) : (
-              <>
-                <MetricStrip
-                  items={[
-                    {
-                      label: 'Себестоимость выпуска',
-                      value: money(d.total),
-                      meta: 'НЗП нач. + затраты − НЗП кон.'
-                    },
-                    {
-                      label: 'Выпущено комплектов',
-                      value: qty(d.completed) + ' компл.',
-                      meta: 'Готовая продукция за месяц'
-                    },
-                    {
-                      label: 'Средняя себестоимость',
-                      value: avgUnitCost != null ? money(avgUnitCost) : '—',
-                      meta: 'На 1 выпущенный комплект'
-                    }
-                  ]}
-                />
+              <div className="inline-note info version-banner">
+                <span>
+                  Склад сырья (5-й склад Иваново) учитывается в метрах и штуках на отдельном складе.
+                </span>
+                <a href={href('/stock/1?tab=history&start=' + monthStart + '&end=' + monthEnd)}>
+                  Движения сырья за {monthText(month).toLowerCase()} →
+                </a>
+              </div>
+            </>
+          ) : (
+            <>
+              <MetricStrip
+                items={[
+                  {
+                    label: 'Себестоимость выпуска',
+                    value: money(d.total),
+                    meta: 'НЗП на начало + затраты − НЗП на конец'
+                  },
+                  {
+                    label: 'Выпущено комплектов',
+                    value: qty(d.completed) + ' компл.',
+                    meta: 'Готовая продукция за месяц'
+                  },
+                  {
+                    label: 'Средняя себестоимость',
+                    value: avgUnitCost != null ? money(avgUnitCost) : '—',
+                    meta: 'На 1 выпущенный комплект'
+                  }
+                ]}
+              />
 
-                <div className="cost-breakdown">
-                  <div className="chart-title">
-                    <h3>Структура себестоимости выпуска</h3>
-                    <span>₽ · доля</span>
-                  </div>
-                  <small className="muted">
-                    НЗП на начало + Материалы + Сдельная оплата + Прочие затраты − НЗП на конец
-                  </small>
-                  {grossCost > 0 && (
-                    <>
-                      <div className="cost-stack" role="img" aria-label="Структура затрат за месяц">
-                        {costParts
-                          .filter(p => p.value > 0)
-                          .map(p => (
-                            <span
-                              key={p.key}
-                              title={`${p.label}: ${money(p.value)}`}
-                              style={{ width: (p.value / grossCost) * 100 + '%', background: p.color }}
-                            />
-                          ))}
-                      </div>
-                      <div className="cost-legend">
-                        {costParts.map(p => {
-                          const share = grossCost > 0 ? Math.round((Math.max(0, p.value) / grossCost) * 100) : 0
-                          return (
-                            <span key={p.key}>
-                              <i className="dot" style={{ background: p.color }} />
-                              {p.label}: <strong>{money(p.value)}</strong> ({share}%)
-                            </span>
-                          )
-                        })}
-                      </div>
-                    </>
-                  )}
-                  <div className="output-chart">
-                    {accounting.map(([key, label, kind]) => {
-                      const val = d[key] || 0
-                      const isDeduction = kind === 'deduction'
-                      const share = grossCost > 0 ? Math.round((Math.abs(val) / grossCost) * 100) : 0
-                      return (
-                        <div className="cost-row" key={key}>
-                          <span>
-                            {isDeduction ? '− ' + label : '+ ' + label}{' '}
-                            <small className="muted">({share}%)</small>
-                          </span>
-                          <div className="bar-track" aria-hidden="true">
-                            <div
-                              className={'bar-fill ' + (isDeduction ? 'cost-deduction' : key === 'wages' ? 'sew' : key === 'material' ? 'cut' : 'pack')}
-                              style={{ width: (Math.abs(val) / maxArticle) * 100 + '%' }}
-                            />
-                          </div>
-                          <strong className={isDeduction && val > 0 ? 'negative right' : 'right'}>
-                            {isDeduction && val > 0 ? '−' : ''}
-                            {money(val)}
-                          </strong>
+              <Section
+                title="Структура себестоимости выпуска"
+                subtitle="НЗП на начало + материалы + сдельная оплата + прочие затраты − НЗП на конец"
+              >
+                <div className="surface-panel">
+                  <div className="cost-breakdown">
+                    {grossCost > 0 && (
+                      <>
+                        <div className="cost-stack" role="img" aria-label="Структура затрат за месяц">
+                          {costParts
+                            .filter(p => p.value > 0)
+                            .map(p => (
+                              <span
+                                key={p.key}
+                                title={`${p.label}: ${money(p.value)}`}
+                                style={{ width: (p.value / grossCost) * 100 + '%', background: p.color }}
+                              />
+                            ))}
                         </div>
-                      )
-                    })}
+                        <div className="cost-legend">
+                          {costParts.map(p => {
+                            const share = grossCost > 0 ? Math.round((Math.max(0, p.value) / grossCost) * 100) : 0
+                            return (
+                              <span key={p.key}>
+                                <i className="dot" style={{ background: p.color }} />
+                                {p.label}: <strong>{money(p.value)}</strong> ({share}%)
+                              </span>
+                            )
+                          })}
+                        </div>
+                      </>
+                    )}
+                    <div className="output-chart">
+                      {accounting.map(([key, label, kind]) => {
+                        const val = d[key] || 0
+                        const isDeduction = kind === 'deduction'
+                        const share = grossCost > 0 ? Math.round((Math.abs(val) / grossCost) * 100) : 0
+                        return (
+                          <div className="cost-row" key={key}>
+                            <span>
+                              {isDeduction ? '− ' + label : '+ ' + label}{' '}
+                              <small className="muted">({share}%)</small>
+                            </span>
+                            <div className="bar-track" aria-hidden="true">
+                              <div
+                                className={'bar-fill ' + (isDeduction ? 'cost-deduction' : key === 'wages' ? 'sew' : key === 'material' ? 'cut' : 'pack')}
+                                style={{ width: (Math.abs(val) / maxArticle) * 100 + '%' }}
+                              />
+                            </div>
+                            <strong className={isDeduction && val > 0 ? 'negative right' : 'right'}>
+                              {isDeduction && val > 0 ? '−' : ''}
+                              {money(val)}
+                            </strong>
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
                 </div>
+              </Section>
 
+              <Section title="Статьи себестоимости">
                 <Table
                   rows={accounting.map(([key, label, kind]) => ({ key, label, kind, value: d[key] }))}
                   rowKey={r => r.key}
@@ -1528,18 +1529,18 @@ export function Month() {
                     </tr>
                   }
                 />
+              </Section>
 
-                {d.overhead_details && <p className="inline-note">{d.overhead_details}</p>}
-              </>
-            )
-          }}
-        </Guard>
-      </Card>
+              {d.overhead_details && <p className="inline-note">{d.overhead_details}</p>}
+            </>
+          )
+        }}
+      </Guard>
     </Page>
   )
 }
 
-/* --- Настройки --- */
+/* --- Профиль и настройки (#/profile, #/settings) --- */
 export function Settings() {
   const { user, settings, logout, openInstallGuide, installPwa, isStandalone, canInstallPwa } = useWorkspace()
   const toast = useToast()
@@ -1566,159 +1567,178 @@ export function Settings() {
   }
 
   return (
-    <Page title="Настройки" subtitle="Учётная запись, открытый период и безопасность доступа">
-      <div className="settings-grid">
-        <div className="settings-col">
-          <Card title="Мой профиль" className="profile-card">
-            <div className="profile-account-head">
-              <span className="avatar" aria-hidden="true">
-                {user.name?.[0] || '?'}
-              </span>
-              <div>
-                <strong>{user.name}</strong>
-                <span className="muted">
-                  {user.role_name} · {user.email}
+    <Page title="Профиль" subtitle="Учётная запись, открытый период и безопасность доступа">
+      <div className="profile-layout">
+        <div className="profile-col">
+          <Section title="Учётная запись">
+            <div className="surface-panel profile-card">
+              <div className="profile-account-head">
+                <span className="avatar" aria-hidden="true">
+                  {user.name?.[0] || '?'}
                 </span>
+                <div>
+                  <strong>{user.name}</strong>
+                  <span className="muted">
+                    {user.role_name} · {user.email}
+                  </span>
+                </div>
               </div>
-            </div>
-            <Details
-              values={[
-                ['Имя', user.name],
-                ['Роль', user.role_name],
-                ['Электронная почта', user.email],
-                ['Язык интерфейса', 'Русский'],
-                ...(user.city ? [['Склад', user.warehouse_name + ' · ' + user.city]] : [])
-              ]}
-            />
-            <ActionRow>
-              <Button onClick={logout}>Выйти из системы</Button>
-            </ActionRow>
-          </Card>
-
-          {settings && (
-            <Card title="Параметры учёта">
               <Details
                 values={[
-                  ['Организация', settings.company],
-                  [
-                    'Открытый расчётный период',
-                    <div className="assignment-help">
-                      <Status value="posted" label={monthText(settings.open_month)} />
-                      <small className="muted">с {dayText(settings.open_month + '-01')}</small>
-                    </div>
-                  ]
+                  ['Имя', user.name],
+                  ['Роль', user.role_name],
+                  ['Электронная почта', user.email],
+                  ['Язык интерфейса', 'Русский'],
+                  ...(user.city ? [['Склад', user.warehouse_name + ' · ' + user.city]] : [])
                 ]}
               />
-              <p className="muted">
-                Операции задним числом ограничены открытым периодом. Нормы материалов и расценки хранятся в спецификациях изделий.
-              </p>
-              <ActionRow>
-                <Button to="/catalog">Открыть изделия и нормы</Button>
-              </ActionRow>
-            </Card>
-          )}
-
-          <Card title="Приложение на телефоне">
-            {isStandalone ? (
-              <div className="pwa-install-card">
-                <p className="muted">Приложение установлено и работает в полноэкранном режиме.</p>
-                <Status value="posted" label="Установлено" />
+              <div className="profile-logout-row">
+                <Button kind="quiet-danger" onClick={logout}>
+                  Выйти из аккаунта
+                </Button>
               </div>
-            ) : (
-              <div className="pwa-install-card">
+            </div>
+          </Section>
+
+          {settings && (
+            <Section title="Параметры учёта">
+              <div className="surface-panel">
+                <Details
+                  values={[
+                    ['Организация', settings.company],
+                    [
+                      'Открытый расчётный период',
+                      <div className="assignment-help">
+                        <Status value="posted" label={monthText(settings.open_month)} />
+                        <small className="muted">с {dayText(settings.open_month + '-01')}</small>
+                      </div>
+                    ]
+                  ]}
+                />
                 <p className="muted">
-                  Добавьте «Швейную фабрику» на экран «Домой» для быстрого запуска, полноэкранного режима и кэширования интерфейса.
+                  Операции задним числом ограничены открытым периодом. Нормы материалов и расценки хранятся в спецификациях изделий.
                 </p>
                 <ActionRow>
-                  {canInstallPwa && installPwa && (
-                    <Button kind="primary" onClick={installPwa}>
-                      Установить приложение
-                    </Button>
-                  )}
-                  {openInstallGuide && (
-                    <Button kind={canInstallPwa ? 'secondary' : 'primary'} onClick={openInstallGuide}>
-                      Установить на экран «Домой»
-                    </Button>
-                  )}
+                  <Button to="/catalog">Открыть изделия и нормы</Button>
                 </ActionRow>
               </div>
-            )}
-          </Card>
+            </Section>
+          )}
+
+          <Section title="Приложение на телефоне">
+            <div className="surface-panel">
+              {isStandalone ? (
+                <div className="pwa-install-card">
+                  <p className="muted">Приложение установлено и работает в полноэкранном режиме.</p>
+                  <Status value="posted" label="Установлено" />
+                </div>
+              ) : (
+                <div className="pwa-install-card">
+                  <p className="muted">
+                    Добавьте «Швейную фабрику» на экран «Домой» для быстрого запуска, полноэкранного режима и кэширования интерфейса.
+                  </p>
+                  {canInstallPwa && installPwa && openInstallGuide ? (
+                    <div className="action-pair">
+                      <Button kind="primary" onClick={installPwa}>
+                        Установить
+                      </Button>
+                      <Button kind="secondary" onClick={openInstallGuide}>
+                        Инструкция
+                      </Button>
+                    </div>
+                  ) : openInstallGuide ? (
+                    <Button kind="primary" onClick={openInstallGuide}>
+                      Установить на экран «Домой»
+                    </Button>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          </Section>
         </div>
 
-        <Card title="Смена пароля" subtitle="После смены пароля все другие активные сеансы будут завершены">
-          {saved && (
-            <div className="notice success" role="status">
-              Пароль успешно изменён.
+        <div className="profile-col">
+          <Section
+            title="Смена пароля"
+            subtitle="После смены пароля все другие активные сеансы будут завершены"
+          >
+            <div className="surface-panel">
+              {saved && (
+                <div className="notice success" role="status">
+                  Пароль успешно изменён.
+                </div>
+              )}
+              <form className="spec-form" onSubmit={handlePasswordSubmit}>
+                <Field label="Текущий пароль">
+                  <PasswordInput
+                    required
+                    maxLength="128"
+                    autoComplete="current-password"
+                    disabled={state.busy}
+                    value={data.old}
+                    onChange={e => {
+                      setSaved(false)
+                      setData(v => ({ ...v, old: e.target.value }))
+                    }}
+                  />
+                </Field>
+                <Field
+                  label="Новый пароль"
+                  help={
+                    tooShort
+                      ? 'Слишком короткий: нужно минимум 10 символов.'
+                      : sameAsOld
+                        ? 'Новый пароль должен отличаться от текущего.'
+                        : 'Минимум 10 символов'
+                  }
+                >
+                  <PasswordInput
+                    required
+                    minLength="10"
+                    maxLength="128"
+                    autoComplete="new-password"
+                    disabled={state.busy}
+                    value={data.new}
+                    onChange={e => {
+                      setSaved(false)
+                      setData(v => ({ ...v, new: e.target.value }))
+                    }}
+                  />
+                </Field>
+                <Field
+                  label="Повторите новый пароль"
+                  help={mismatch ? 'Введённые пароли не совпадают.' : undefined}
+                >
+                  <PasswordInput
+                    required
+                    minLength="10"
+                    maxLength="128"
+                    autoComplete="new-password"
+                    disabled={state.busy}
+                    value={data.repeat}
+                    onChange={e => {
+                      setSaved(false)
+                      setData(v => ({ ...v, repeat: e.target.value }))
+                    }}
+                  />
+                </Field>
+                <ErrorBox error={state.error} />
+                <div className="form-actions">
+                  <Button
+                    type="submit"
+                    kind="primary"
+                    disabled={state.busy || tooShort || mismatch || sameAsOld}
+                  >
+                    {state.busy ? 'Сохранение…' : 'Изменить пароль'}
+                  </Button>
+                </div>
+              </form>
             </div>
-          )}
-          <form className="spec-form" onSubmit={handlePasswordSubmit}>
-            <Field label="Текущий пароль">
-              <PasswordInput
-                required
-                maxLength="128"
-                autoComplete="current-password"
-                disabled={state.busy}
-                value={data.old}
-                onChange={e => {
-                  setSaved(false)
-                  setData(v => ({ ...v, old: e.target.value }))
-                }}
-              />
-            </Field>
-            <Field
-              label="Новый пароль"
-              help={
-                tooShort
-                  ? 'Слишком короткий: нужно минимум 10 символов.'
-                  : sameAsOld
-                    ? 'Новый пароль должен отличаться от текущего.'
-                    : 'Минимум 10 символов'
-              }
-            >
-              <PasswordInput
-                required
-                minLength="10"
-                maxLength="128"
-                autoComplete="new-password"
-                disabled={state.busy}
-                value={data.new}
-                onChange={e => {
-                  setSaved(false)
-                  setData(v => ({ ...v, new: e.target.value }))
-                }}
-              />
-            </Field>
-            <Field
-              label="Повторите новый пароль"
-              help={mismatch ? 'Введённые пароли не совпадают.' : undefined}
-            >
-              <PasswordInput
-                required
-                minLength="10"
-                maxLength="128"
-                autoComplete="new-password"
-                disabled={state.busy}
-                value={data.repeat}
-                onChange={e => {
-                  setSaved(false)
-                  setData(v => ({ ...v, repeat: e.target.value }))
-                }}
-              />
-            </Field>
-            <ErrorBox error={state.error} />
-            <div className="form-actions">
-              <Button
-                type="submit"
-                kind="primary"
-                disabled={state.busy || tooShort || mismatch || sameAsOld}
-              >
-                {state.busy ? 'Сохранение…' : 'Изменить пароль'}
-              </Button>
-            </div>
-          </form>
-        </Card>
+          </Section>
+        </div>
       </div>
     </Page>
   )
 }
+
+export const Profile = Settings
