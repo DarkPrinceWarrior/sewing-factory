@@ -1,4 +1,4 @@
-import React, { Component, useCallback, useEffect, useRef, useState } from 'react'
+import React, { Component, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import '@fontsource-variable/inter'
 import './style.css'
@@ -13,7 +13,6 @@ import {
   Loading,
   Page,
   PwaInstallGuide,
-  Sheet,
   ToastProvider,
   api,
   go,
@@ -22,7 +21,8 @@ import {
   useAction,
   useClearToasts,
   useRemote,
-  useToast
+  useToast,
+  useWorkspace
 } from './ui'
 import { Overview, ReportDetail, ReportList, ReportMovements } from './production'
 import { CentralStock, RawMaterial, RegionalRegister, TransactionRoute, WarehouseDetail } from './warehouse'
@@ -138,38 +138,25 @@ function RefreshStatus({ at, busy }) {
   )
 }
 
-function AccessDenied({ home, roleName, message }) {
+function AccessDenied() {
+  const ws = useWorkspace()
+  const setPageHeading = ws?.setPageHeading
+  useLayoutEffect(() => { setPageHeading?.('Нет доступа') }, [setPageHeading])
   return (
-    <Page title="Раздел недоступен" subtitle={roleName ? 'Текущая роль: ' + roleName : undefined}>
-      <Card className="forbidden-card" title="Нет доступа к этому разделу">
-        <p className="muted">
-          {message || 'Этот раздел не входит в полномочия вашей учётной записи. Перейдите в доступный рабочий раздел.'}
-        </p>
-        <div className="left-actions">
-          <Button kind="primary" to={home}>
-            {home === '/regional' ? 'К остаткам склада' : 'Вернуться в обзор'}
-          </Button>
-          <Button to="/profile">Профиль</Button>
-        </div>
-      </Card>
-    </Page>
+    <div className="minimal-state" role="status">
+      <p>Нет доступа к этому разделу</p>
+    </div>
   )
 }
 
-function NotFound({ home }) {
+function NotFound() {
+  const ws = useWorkspace()
+  const setPageHeading = ws?.setPageHeading
+  useLayoutEffect(() => { setPageHeading?.('Страница не найдена') }, [setPageHeading])
   return (
-    <Page title="Страница не найдена" subtitle="Проверьте адрес или перейдите в рабочий раздел">
-      <Card className="forbidden-card" title="Маршрут не найден">
-        <p className="muted">
-          Запрошенная страница не существует или ссылка устарела.
-        </p>
-        <div className="left-actions">
-          <Button kind="primary" to={home}>
-            {home === '/regional' ? 'К остаткам склада' : 'На главную'}
-          </Button>
-        </div>
-      </Card>
-    </Page>
+    <div className="minimal-state" role="status">
+      <p>Страница не найдена</p>
+    </div>
   )
 }
 
@@ -269,23 +256,11 @@ function Login({ done, initialError = '' }) {
               {state.busy ? 'Вход…' : 'Войти'}
             </Button>
             <button type="button" className="forgot-link" disabled={state.busy} onClick={() => setHelp(true)}>
-              Не помню пароль
+              Забыли пароль?
             </button>
           </div>
           <p className="login-footer">Локальный учёт производства, складов и сдельной оплаты</p>
         </form>
-      </div>
-      <div className="login-half login-description">
-        <div>
-          <span className="login-eyebrow">Производство и склады</span>
-          <h2>Учёт производства<br />по факту</h2>
-          <p>Рабочее место бухгалтера, мастера смены и регионального склада</p>
-          <ol className="login-benefits">
-            <li>Выработка за смену и списание сырья</li>
-            <li>Пять складов в Иваново и отправка в регионы</li>
-            <li>Сдельная зарплата и себестоимость выпуска</li>
-          </ol>
-        </div>
       </div>
       {help && (
         <Dialog
@@ -308,9 +283,9 @@ function Login({ done, initialError = '' }) {
 function Route({ path, user }) {
   const match = path.split('/').at(-1)
   const id = match === 'new' ? undefined : Number(match)
-  const home = homePath(user)
 
   if (isProfilePath(path)) return <Settings />
+  if (path === '/more') return <MorePage />
 
   if (user.role === 'regional') {
     if (path === '/regional') return <WarehouseDetail id={user.warehouse_id} regional />
@@ -319,24 +294,24 @@ function Route({ path, user }) {
     if (/^\/receiving\/[1-9]\d*$/.test(path)) return <TransactionRoute mode="transfer" id={id} />
     if (section('sales').test(path)) return <TransactionRoute mode="sale" id={id} />
     if (/^\/(overview|reports|stock|catalog|people|payroll|month)(\/|$)/.test(path)) {
-      return <AccessDenied home={home} roleName={user.role_name} />
+      return <AccessDenied />
     }
-    return <NotFound home={home} />
+    return <NotFound />
   }
 
   if (/^\/(regional|receiving)(\/|$)/.test(path)) {
-    return <AccessDenied home={home} roleName={user.role_name} />
+    return <AccessDenied />
   }
 
   if (path === '/sales') {
     return isCentralWriter(user.role)
       ? <CentralStock tab="sales" />
-      : <AccessDenied home={home} roleName={user.role_name} />
+      : <AccessDenied />
   }
   if (section('sales').test(path)) {
     return isCentralWriter(user.role)
       ? <TransactionRoute mode="sale" id={id} />
-      : <AccessDenied home={home} roleName={user.role_name} />
+      : <AccessDenied />
   }
 
   if (path === '/overview') return <Overview />
@@ -347,7 +322,7 @@ function Route({ path, user }) {
   if (path === '/catalog/new') {
     return ['admin', 'accountant'].includes(user.role)
       ? <ProductDetail />
-      : <AccessDenied home={home} roleName={user.role_name} />
+      : <AccessDenied />
   }
   if (/^\/catalog\/[1-9]\d*$/.test(path)) return <ProductDetail id={id} />
   if (/^\/catalog\/[1-9]\d*\/specs\/[1-9]\d*$/.test(path)) {
@@ -356,38 +331,38 @@ function Route({ path, user }) {
   if (path === '/people') return <People />
   if (/^\/people\/[1-9]\d*$/.test(path)) return <StaffDetail id={id} />
   if (path === '/payroll') {
-    return user.role !== 'master' ? <Payroll /> : <AccessDenied home={home} roleName={user.role_name} />
+    return user.role !== 'master' ? <Payroll /> : <AccessDenied />
   }
   if (path === '/month') {
-    return user.role !== 'master' ? <Month /> : <AccessDenied home={home} roleName={user.role_name} />
+    return user.role !== 'master' ? <Month /> : <AccessDenied />
   }
   if (path === '/stock') return <CentralStock />
   if (/^\/stock\/[1-9]\d*$/.test(path)) {
-    if (user.role === 'master' && id > 5) return <AccessDenied home={home} roleName={user.role_name} />
+    if (user.role === 'master' && id > 5) return <AccessDenied />
     return <WarehouseDetail id={id} />
   }
   if (/^\/stock\/1\/items\/[1-9]\d*$/.test(path)) return <RawMaterial id={id} />
   if (/^\/stock\/(transfers|sales|access)$/.test(path)) {
-    if (match === 'access' && user.role !== 'admin') return <AccessDenied home={home} roleName={user.role_name} />
-    if (user.role === 'master') return <AccessDenied home={home} roleName={user.role_name} />
+    if (match === 'access' && user.role !== 'admin') return <AccessDenied />
+    if (user.role === 'master') return <AccessDenied />
     return <CentralStock tab={match} />
   }
   if (section('stock/transfers').test(path)) {
     return user.role !== 'master'
       ? <TransactionRoute mode="transfer" id={id} />
-      : <AccessDenied home={home} roleName={user.role_name} />
+      : <AccessDenied />
   }
   if (section('stock/receipts').test(path)) {
     return user.role !== 'master'
       ? <TransactionRoute mode="receipt" id={id} />
-      : <AccessDenied home={home} roleName={user.role_name} />
+      : <AccessDenied />
   }
   if (/^\/stock\/sales\/(new|[1-9]\d*)$/.test(path)) {
     return user.role !== 'master'
       ? <TransactionRoute mode="sale" id={id} />
-      : <AccessDenied home={home} roleName={user.role_name} />
+      : <AccessDenied />
   }
-  return <NotFound home={home} />
+  return <NotFound />
 }
 
 function breadcrumbs(path, items, workspace, headingTitle) {
@@ -396,8 +371,13 @@ function breadcrumbs(path, items, workspace, headingTitle) {
   const root = regional ? ['/regional', 'Склад · ' + user.city] : ['/overview', 'Фабрика']
   const crumbs = [root]
 
-  if (headingTitle === 'Раздел недоступен' || headingTitle === 'Страница не найдена') {
+  if (headingTitle === 'Нет доступа' || headingTitle === 'Страница не найдена') {
     crumbs.push([path, headingTitle])
+    return crumbs
+  }
+
+  if (path === '/more') {
+    crumbs.push(['/more', 'Ещё'])
     return crumbs
   }
 
@@ -704,39 +684,28 @@ function MobileHeader({ workspace, current, crumbs, home, backFallback }) {
   )
 }
 
-function BottomNav({ current, user, itemBadge, moreOpen, onOpenMore, onCloseSheets }) {
+function BottomNav({ current, user, itemBadge }) {
   const regional = user.role === 'regional'
   const tabs = regional
     ? [
         ['/regional', 'Остатки', 'stock'],
         ['/receiving', 'Приёмка', 'receiving'],
         ['/sales', 'Продажи', 'sales'],
-        ['/profile', 'Профиль', 'settings']
+        ['/more', 'Ещё', 'more']
       ]
     : [
         ['/overview', 'Обзор', 'overview'],
         ['/reports', 'Отчёты', 'reports'],
         ['/stock', 'Склады', 'stock'],
         ['/catalog', 'Изделия', 'catalog'],
-        ['__more__', 'Ещё', 'more']
+        ['/more', 'Ещё', 'more']
       ]
 
-  const moreRoutes = user.role === 'master'
-    ? ['/people', '/profile', '/settings']
-    : ['/payroll', '/people', '/month', '/profile', '/settings']
-
-  function handleSelect(to) {
-    if (to === '__more__') {
-      onOpenMore()
-      return
-    }
-    onCloseSheets?.()
-    if (current === to || (isProfilePath(to) && isProfilePath(current))) {
-      window.scrollTo({ top: 0, behavior: 'smooth' })
-      return
-    }
-    go(to)
-  }
+  const moreRoutes = regional
+    ? ['/more', '/profile', '/settings']
+    : user.role === 'master'
+      ? ['/more', '/people', '/profile', '/settings']
+      : ['/more', '/payroll', '/people', '/month', '/profile', '/settings']
 
   return (
     <nav
@@ -745,21 +714,24 @@ function BottomNav({ current, user, itemBadge, moreOpen, onOpenMore, onCloseShee
       style={{ '--nav-cols': tabs.length }}
     >
       {tabs.map(([to, label, icon]) => {
-        const isMore = to === '__more__'
+        const isMore = to === '/more'
         const isActive = isMore
-          ? moreOpen || moreRoutes.some(r => active(current, r))
-          : !moreOpen && navActive(current, to, user.role)
+          ? moreRoutes.some(r => active(current, r))
+          : navActive(current, to, user.role)
         const badge = isMore ? null : itemBadge(to)
         return (
-          <button
+          <a
             key={to}
-            type="button"
+            href={href(to)}
             className={'bottom-nav-item' + (isActive ? ' is-active' : '')}
-            aria-current={!isMore && isActive ? 'page' : undefined}
-            aria-expanded={isMore ? moreOpen : undefined}
-            aria-haspopup={isMore ? 'dialog' : undefined}
+            aria-current={isActive ? 'page' : undefined}
             aria-label={badge ? `${label} (${badge.count})` : label}
-            onClick={() => handleSelect(to)}
+            onClick={e => {
+              if (current === to) {
+                e.preventDefault()
+                window.scrollTo({ top: 0, behavior: 'smooth' })
+              }
+            }}
           >
             <span className="bottom-nav-icon" aria-hidden="true">
               <span
@@ -773,84 +745,167 @@ function BottomNav({ current, user, itemBadge, moreOpen, onOpenMore, onCloseShee
               )}
             </span>
             <span className="bottom-nav-label">{label}</span>
-          </button>
+          </a>
         )
       })}
     </nav>
   )
 }
 
-function MoreSheet({ open, onClose, current, user, logout, isStandalone, onInstallPwa }) {
-  const secondaryItems = user.role === 'master'
+function MorePage() {
+  const { user, in_transit, logout, isStandalone, openInstallGuide } = useWorkspace()
+  const regional = user.role === 'regional'
+  const warehouseLabel = regional
+    ? user.warehouse_name && user.city && !user.warehouse_name.includes(user.city)
+      ? `${user.warehouse_name} · ${user.city}`
+      : user.warehouse_name || (user.city ? 'Склад · ' + user.city : null)
+    : null
+
+  const navGroups = regional
     ? [
-        ['/people', 'Сотрудники', 'people'],
-        ['/profile', 'Профиль', 'settings']
+        {
+          key: 'regional',
+          label: user.city ? 'Склад · ' + user.city : 'Региональный склад',
+          items: [
+            { to: '/regional', title: 'Остатки', description: 'Наличие готовой продукции на складе', icon: 'stock' },
+            {
+              to: '/receiving',
+              title: 'Приёмка',
+              description: 'Поставки в пути и подтверждение получения',
+              icon: 'receiving',
+              badge: in_transit?.documents > 0 ? in_transit.documents : 0,
+              badgeLabel: in_transit?.documents > 0 ? `Ожидают приёмки: ${in_transit.documents}` : undefined
+            },
+            { to: '/sales', title: 'Продажи', description: 'Оформление и журнал продаж', icon: 'sales' }
+          ]
+        }
       ]
-    : [
-        ['/payroll', 'Зарплата', 'payroll'],
-        ['/people', 'Сотрудники', 'people'],
-        ['/month', 'Итоги месяца', 'month'],
-        ['/profile', 'Профиль', 'settings']
-      ]
+    : user.role === 'master'
+      ? [
+          {
+            key: 'team',
+            label: 'Люди',
+            items: [
+              { to: '/people', title: 'Сотрудники', description: 'Исполнители по участкам и должности', icon: 'people' }
+            ]
+          }
+        ]
+      : [
+          {
+            key: 'finance',
+            label: 'Зарплата и люди',
+            items: [
+              { to: '/payroll', title: 'Зарплата', description: 'Ведомость, удержания и выгрузка Excel', icon: 'payroll' },
+              { to: '/people', title: 'Сотрудники', description: 'Исполнители, участки и компенсация проезда', icon: 'people' },
+              { to: '/month', title: 'Итоги месяца', description: 'Выпуск, себестоимость и закрытие периода', icon: 'month' }
+            ]
+          }
+        ]
+
+  navGroups.push({
+    key: 'system',
+    label: 'Система',
+    items: [
+      {
+        to: '/profile',
+        title: 'Профиль',
+        description: regional
+          ? 'Учётная запись и смена пароля'
+          : user.role === 'master'
+            ? 'Учётная запись, период и смена пароля'
+            : 'Настройки учёта, ставка грузчика и пароль',
+        icon: 'settings'
+      },
+      ...(!isStandalone
+        ? [
+            {
+              key: 'install-pwa',
+              title: 'Установить на телефон',
+              description: 'Быстрый запуск на весь экран без панели браузера',
+              onClick: openInstallGuide,
+              svg: (
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M10 3v9.5M6.5 9.5 10 13l3.5-3.5M4 16.5h12" />
+                </svg>
+              )
+            }
+          ]
+        : [])
+    ]
+  })
 
   return (
-    <Sheet open={open} onClose={onClose} title="Ещё" subtitle={user.role_name}>
-      <div className="sheet-menu-list" role="navigation" aria-label="Дополнительные разделы">
-        {secondaryItems.map(([to, label, icon]) => {
-          const isActive = navActive(current, to, user.role)
-          return (
-            <a
-              key={to}
-              className={'sheet-menu-item' + (isActive ? ' is-active' : '')}
-              href={href(to)}
-              aria-current={isActive ? 'page' : undefined}
-              onClick={onClose}
-            >
-              <span
-                aria-hidden="true"
-                className="nav-icon"
-                style={{ maskImage: `url(/icons/${icon}.svg)`, WebkitMaskImage: `url(/icons/${icon}.svg)` }}
-              />
-              <span>{label}</span>
-              <svg className="sheet-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
-                <path d="m6 3.5 4.5 4.5L6 12.5" />
-              </svg>
-            </a>
-          )
-        })}
-        {!isStandalone && (
-          <button
-            type="button"
-            className="sheet-menu-item"
-            onClick={() => {
-              onClose()
-              onInstallPwa()
-            }}
-          >
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <path d="M10 3v9.5M6.5 9.5 10 13l3.5-3.5M4 16.5h12" />
-            </svg>
-            <span>Установить приложение</span>
-            <svg className="sheet-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="m6 3.5 4.5 4.5L6 12.5" />
-            </svg>
-          </button>
-        )}
-        <button
-          type="button"
-          className="sheet-menu-item is-danger"
-          onClick={() => {
-            onClose()
-            logout()
-          }}
-        >
+    <Page title="Ещё">
+      <div className="more-page">
+        <a className="more-profile-card" href={href('/profile')}>
+          <span aria-hidden="true" className={'avatar' + (regional ? ' is-regional' : '')}>
+            {initials(user.name)}
+          </span>
+          <span className="more-row-body">
+            <strong>{user.name}</strong>
+            <span style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px', marginTop: '2px' }}>
+              <em className="status" style={{ fontStyle: 'normal' }}>{user.role_name}</em>
+              {warehouseLabel && <small>{warehouseLabel}</small>}
+            </span>
+          </span>
+          <svg className="more-row-chevron" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m6 3.5 4.5 4.5L6 12.5" />
+          </svg>
+        </a>
+
+        {navGroups.map(group => (
+          <section className="more-group" key={group.key} aria-labelledby={'more-group-' + group.key}>
+            <h2 className="more-group-title" id={'more-group-' + group.key}>{group.label}</h2>
+            <div className="more-list">
+              {group.items.map(item => (
+                item.to ? (
+                  <a key={item.to} className="more-row" href={href(item.to)}>
+                    <span className="more-row-icon" aria-hidden="true">
+                      <span
+                        className="nav-icon"
+                        style={{ maskImage: `url(/icons/${item.icon}.svg)`, WebkitMaskImage: `url(/icons/${item.icon}.svg)` }}
+                      />
+                    </span>
+                    <span className="more-row-body">
+                      <strong>{item.title}</strong>
+                      {item.description && <span>{item.description}</span>}
+                    </span>
+                    {item.badge > 0 && (
+                      <span className="nav-badge" title={item.badgeLabel} aria-label={item.badgeLabel}>
+                        {item.badge}
+                      </span>
+                    )}
+                    <svg className="more-row-chevron" viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="m6 3.5 4.5 4.5L6 12.5" />
+                    </svg>
+                  </a>
+                ) : (
+                  <button key={item.key} type="button" className="more-row" onClick={item.onClick}>
+                    <span className="more-row-icon" aria-hidden="true">
+                      {item.svg}
+                    </span>
+                    <span className="more-row-body">
+                      <strong>{item.title}</strong>
+                      {item.description && <span>{item.description}</span>}
+                    </span>
+                    <svg className="more-row-chevron" viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="m6 3.5 4.5 4.5L6 12.5" />
+                    </svg>
+                  </button>
+                )
+              ))}
+            </div>
+          </section>
+        ))}
+
+        <button type="button" className="more-logout-btn" onClick={logout}>
           <svg viewBox="0 0 20 20" aria-hidden="true">
             <path d="M8 16H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3M13 14l4-4-4-4M17 10H8" />
           </svg>
-          <span>Выйти из аккаунта</span>
+          <span>Выйти</span>
         </button>
       </div>
-    </Sheet>
+    </Page>
   )
 }
 
@@ -864,7 +919,6 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, online, pwa, l
   const [heading, setHeading] = useState(null)
   const setPageHeading = useCallback(title => setHeading({ path, title }), [path])
   const [revision, setRevision] = useState(0)
-  const [moreOpen, setMoreOpen] = useState(false)
   const lastNonProfileRef = useRef(home)
   const calendarDayRef = useRef(moscowDateIso())
   const refreshPage = useCallback(() => setRevision(n => n + 1), [])
@@ -897,8 +951,12 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, online, pwa, l
     return null
   }
 
+  const closeInstallGuide = pwa.closeInstallGuide
   useEffect(() => {
-    setMoreOpen(false)
+    closeInstallGuide()
+  }, [path, closeInstallGuide])
+
+  useEffect(() => {
     window.scrollTo(0, 0)
   }, [current])
 
@@ -1037,21 +1095,7 @@ function Shell({ path, workspace, refresh, refreshing, updatedAt, online, pwa, l
           current={current}
           user={user}
           itemBadge={itemBadge}
-          moreOpen={moreOpen}
-          onOpenMore={() => setMoreOpen(true)}
-          onCloseSheets={() => setMoreOpen(false)}
         />
-        {!regional && (
-          <MoreSheet
-            open={moreOpen}
-            onClose={() => setMoreOpen(false)}
-            current={current}
-            user={user}
-            logout={logout}
-            isStandalone={pwa.isStandalone}
-            onInstallPwa={pwa.triggerInstall}
-          />
-        )}
         <PwaInstallGuide
           open={pwa.installOpen}
           onClose={pwa.closeInstallGuide}

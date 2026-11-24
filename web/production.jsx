@@ -1,10 +1,10 @@
 import React, { useId, useState } from 'react'
 import {
-  ActionRow, Button, Card, Confirm, DateControl, DateRange, Dialog, Download, EmptyState,
+  ActionRow, Button, Card, Confirm, DataCard, DateControl, DateRange, Dialog, Download, EmptyState,
   ErrorBox, Field, FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Section, Select,
-  Status, Stepper, Table, Tabs, api, dayText, duration, go, href, itemText, money, monthText,
-  number, qty, roleCanWrite, routeWith, shifts, stages, statuses, timeText, useAction, useFilters,
-  useRemote, useSearchOptions, useToast, useWorkspace
+  Status, Stepper, SummaryCard, Table, Tabs, api, dayText, duration, go, href, itemText, money,
+  monthText, number, qty, roleCanWrite, routeWith, shifts, stages, statuses, timeText, useAction,
+  useFilters, useRemote, useSearchOptions, useToast, useWorkspace
 } from './ui'
 import { SearchPicker } from './pickers'
 
@@ -120,6 +120,8 @@ function shiftReportColumns(overview = false) {
       label: 'Начислено',
       width: overview ? '22%' : '16%',
       align: 'right',
+      mobileAccent: true,
+      mobileFull: overview,
       cell: r => (r.status === 'draft' ? '—' : money(r.wages))
     }
   ]
@@ -130,6 +132,7 @@ function shiftReportColumns(overview = false) {
     label: 'Статус',
     width: overview ? '20%' : '15%',
     align: overview ? 'after-number' : undefined,
+    mobileKind: 'status',
     cell: r => (
       <>
         <Status value={r.status} />
@@ -1007,10 +1010,10 @@ function MaterialRows({ document, sourceId = 1, sourceLabel = 'Склад сыр
       primary: true,
       cell: r => <a href={href(materialHref(r.item_id))}>{r.name}</a>
     },
-    { label: 'Изделие', cell: r => r.product },
+    { label: 'Изделие', mobileFull: !isDraft, cell: r => r.product },
     { label: 'Норма на комплект', align: 'right', cell: r => qty(r.norm) + ' ' + r.unit },
     { label: 'Комплектов', align: 'right', cell: r => qty(r.count) },
-    { label: 'К списанию', align: 'right', cell: r => qty(r.quantity) + ' ' + r.unit }
+    { label: 'К списанию', align: 'right', mobileAccent: true, cell: r => qty(r.quantity) + ' ' + r.unit }
   ]
   if (isDraft) {
     columns.push({
@@ -1051,21 +1054,24 @@ function MaterialRows({ document, sourceId = 1, sourceLabel = 'Склад сыр
               <strong>Недостаточно сырья на складе «{sourceLabel}» для проведения отчёта:</strong>
             </p>
           )}
-          {summaryRows.map(r => (
-            <div key={r.item_id}>
-              <strong>
-                <a href={href(materialHref(r.item_id))}>{r.name}</a>: {qty(r.quantity)} {r.unit}.
-              </strong>
-              {isDraft && (
-                <span className={r.available < r.quantity ? ' negative' : ''}>
-                  {r.available >= r.quantity
-                    ? ' На складе «' + sourceLabel + '» останется ' + qty(r.available - r.quantity)
-                    : ' На складе «' + sourceLabel + '» ' + qty(r.available) + ', не хватает ' + qty(r.quantity - r.available)}{' '}
-                  {r.unit}.
-                </span>
-              )}
-            </div>
-          ))}
+          {summaryRows.map(r => {
+            const endDot = String(r.unit || '').endsWith('.') ? '' : '.'
+            return (
+              <div key={r.item_id}>
+                <strong>
+                  <a href={href(materialHref(r.item_id))}>{r.name}</a>: {qty(r.quantity)} {r.unit}{endDot}
+                </strong>
+                {isDraft && (
+                  <span className={r.available < r.quantity ? ' negative' : ''}>
+                    {r.available >= r.quantity
+                      ? ' На складе «' + sourceLabel + '» останется ' + qty(r.available - r.quantity)
+                      : ' На складе «' + sourceLabel + '» ' + qty(r.available) + ', не хватает ' + qty(r.quantity - r.available)}{' '}
+                    {r.unit}{endDot}
+                  </span>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </>
@@ -1076,6 +1082,8 @@ export function DocumentHistory({ document, hideCost, defaultOpen = false }) {
   const ws = useWorkspace()
   const maskCost = hideCost ?? (ws?.user?.role === 'regional')
   const [open, setOpen] = useState(defaultOpen)
+  const eventRows = document.events || []
+  const movementRows = document.movements || []
   const movementColumns = [
     {
       label: 'Операция',
@@ -1084,26 +1092,38 @@ export function DocumentHistory({ document, hideCost, defaultOpen = false }) {
     },
     { label: 'Склад', cell: r => r.warehouse },
     { label: 'Товар', cell: itemText },
-    { label: 'Количество', align: 'right', cell: r => qty(r.quantity) + ' ' + r.unit }
+    {
+      label: 'Количество',
+      align: 'right',
+      mobileAccent: maskCost,
+      cell: r => qty(r.quantity) + ' ' + r.unit
+    }
   ]
   if (!maskCost) {
-    movementColumns.push({ label: 'Стоимость', align: 'right', cell: r => money(r.value) })
+    movementColumns.push({
+      label: 'Стоимость',
+      align: 'right',
+      mobileAccent: true,
+      cell: r => money(r.value)
+    })
   }
 
   return (
-    <Section
-      title="История документа"
-      actions={
+    <section className="section">
+      <div className="doc-history-head">
+        <h2>
+          История документа
+          {eventRows.length > 0 && <span className="muted"> · {number(eventRows.length)}</span>}
+        </h2>
         <Button kind="ghost" size="small" aria-expanded={open} onClick={() => setOpen(!open)}>
           {open ? 'Свернуть' : 'Развернуть'}
         </Button>
-      }
-    >
+      </div>
       {open && (
-        <>
+        <div className="doc-history-list">
           <Table
             label="История изменений"
-            rows={document.events || []}
+            rows={eventRows}
             empty="Событий пока нет"
             columns={[
               { label: 'Действие', primary: true, cell: r => events[r.action] || r.action },
@@ -1116,14 +1136,14 @@ export function DocumentHistory({ document, hideCost, defaultOpen = false }) {
               { label: 'Комментарий', mobileFull: true, cell: r => r.memo || '—' }
             ]}
           />
-          {document.movements?.length > 0 && (
+          {movementRows.length > 0 && (
             <Section title="Движение запасов">
-              <Table label="Движение запасов" rows={document.movements} columns={movementColumns} />
+              <Table label="Движение запасов" rows={movementRows} columns={movementColumns} />
             </Section>
           )}
-        </>
+        </div>
       )}
-    </Section>
+    </section>
   )
 }
 
@@ -1411,7 +1431,7 @@ function ReportEditor({ document }) {
       <DocumentRelationBanner document={document} />
 
       {editable && (
-        <div className="surface-panel">
+        <div className="form-flat">
           <div className="toolbar report-fields">
             <Field label="Дата">
               <DateControl
@@ -1497,12 +1517,18 @@ function ReportEditor({ document }) {
             }
             columns={[
               { label: 'Изделие', width: '28%', primary: true, cell: r => r.item.name },
-              { label: 'Размер', width: '13%', cell: r => r.item.size || '—' },
+              {
+                label: 'Размер',
+                width: '13%',
+                mobileSubtitle: true,
+                cell: r => r.item.size || '—'
+              },
               {
                 label: 'Количество, компл.',
                 width: '15%',
                 align: 'right',
-                cell: r => number(r.quantity)
+                mobileAccent: true,
+                cell: r => number(r.quantity) + ' компл.'
               },
               ...(report.stage === 'pack'
                 ? [
@@ -1518,6 +1544,7 @@ function ReportEditor({ document }) {
                 label: 'Спецификация',
                 width: '21%',
                 align: 'after-number',
+                mobileFull: report.stage !== 'pack',
                 cell: r => {
                   const explicit = r.spec_id ? specsById.get(Number(r.spec_id)) : null
                   const saved = computed?.lines?.find(l => l.item_id === r.item_id)
@@ -1549,6 +1576,7 @@ function ReportEditor({ document }) {
                       label: 'Действия',
                       width: '12%',
                       align: 'right',
+                      mobileKind: 'actions',
                       cell: (r, i) => (
                         <Button kind="ghost" onClick={() => setEdit({ kind: 'line', index: i })}>
                           Изменить
@@ -1558,6 +1586,23 @@ function ReportEditor({ document }) {
                   ]
                 : [])
             ]}
+            mobileSummary={
+              products.length > 0
+                ? {
+                    rows: [
+                      { label: 'Итого выработка', value: number(totalOutput) + ' компл.', strong: true },
+                      ...(report.stage === 'pack'
+                        ? [
+                            {
+                              label: 'Передано с пошива',
+                              value: number(products.reduce((s, l) => s + (l.prepared || 0), 0)) + ' компл.'
+                            }
+                          ]
+                        : [])
+                    ]
+                  }
+                : null
+            }
             footer={
               products.length > 0 ? (
                 <tr>
@@ -1574,10 +1619,12 @@ function ReportEditor({ document }) {
             }
           />
           {editable && (
-            <div className="left-actions">
-              <Button onClick={() => setEdit({ kind: 'line', index: -1 })}>Добавить изделие</Button>
+            <div className="action-pair">
+              <Button kind="secondary" onClick={() => setEdit({ kind: 'line', index: -1 })}>
+                Добавить изделие
+              </Button>
               <Button
-                kind="ghost"
+                kind="secondary"
                 disabled={hourlyRows.length >= eligibleHourlyWorkers.length}
                 onClick={() => {
                   selectTab('wages')
@@ -1601,7 +1648,7 @@ function ReportEditor({ document }) {
               sourceLabel={activeSourceLabel}
             />
           ) : (
-            <div className="surface-panel">
+            <div className="data-card data-card-empty">
               <EmptyState
                 title={previewAction.busy ? 'Расчёт материалов…' : 'Нет выработки для расчёта'}
                 description={
@@ -1623,46 +1670,48 @@ function ReportEditor({ document }) {
           {(editable || products.length > 0) && (
             <>
               {editable && products.length > 0 && (
-                <div className="surface-panel">
-                  <div className="assignment-progress" aria-label="Распределение выработки по изделиям">
-                    {products.map((l, idx) => {
-                      const allocated = l.assignments.reduce((s, a) => s + a.quantity, 0)
-                      const remaining = l.quantity - allocated
-                      const pct = l.quantity > 0 ? Math.min(100, Math.round((allocated / l.quantity) * 100)) : 0
-                      const fillState = remaining === 0 ? 'is-complete' : remaining < 0 ? 'is-over' : 'is-warning'
-                      return (
-                        <div className="assignment-progress-row" key={l.item_id}>
-                          <div>
-                            <strong>{itemText(l.item)}</strong>
-                            <span className="cell-secondary">
-                              распределено {number(allocated)} из {number(l.quantity)} компл.
-                            </span>
-                          </div>
+                <div className="assignment-dist-list" aria-label="Распределение выработки по изделиям">
+                  {products.map((l, idx) => {
+                    const allocated = l.assignments.reduce((s, a) => s + a.quantity, 0)
+                    const remaining = l.quantity - allocated
+                    const pct = l.quantity > 0 ? Math.min(100, Math.round((allocated / l.quantity) * 100)) : 0
+                    const fillState = remaining === 0 ? 'is-complete' : remaining < 0 ? 'is-over' : 'is-warning'
+                    return (
+                      <DataCard
+                        key={l.item_id}
+                        className="assignment-dist-card"
+                        title={itemText(l.item)}
+                        subtitle={'Распределено ' + number(allocated) + ' из ' + number(l.quantity) + ' компл.'}
+                        badge={
+                          remaining === 0 ? (
+                            <Status value="posted" label="Распределено" />
+                          ) : remaining > 0 ? (
+                            <Status value="draft" label={'Остаток: ' + number(remaining) + ' компл.'} />
+                          ) : (
+                            <Status value="corrected" label={'Превышение: ' + number(-remaining) + ' компл.'} />
+                          )
+                        }
+                        actions={
+                          remaining > 0 ? (
+                            <Button
+                              kind="secondary"
+                              size="small"
+                              disabled={!eligibleWorkers.length}
+                              onClick={() => setEdit({ kind: 'assignment', lineIndex: idx })}
+                            >
+                              Назначить остаток ({number(remaining)})
+                            </Button>
+                          ) : null
+                        }
+                      >
+                        <div className="assignment-dist-progress">
                           <div className="progress-track" aria-hidden="true">
                             <div className={'progress-fill ' + fillState} style={{ width: pct + '%' }} />
                           </div>
-                          <div className="actions">
-                            {remaining === 0 ? (
-                              <span className="positive">Распределено полностью</span>
-                            ) : remaining > 0 ? (
-                              <>
-                                <span className="negative">Остаток: {number(remaining)} компл.</span>
-                                <Button
-                                  size="small"
-                                  disabled={!eligibleWorkers.length}
-                                  onClick={() => setEdit({ kind: 'assignment', lineIndex: idx })}
-                                >
-                                  Назначить остаток ({number(remaining)})
-                                </Button>
-                              </>
-                            ) : (
-                              <span className="negative">Превышение на {number(-remaining)} компл.</span>
-                            )}
-                          </div>
                         </div>
-                      )
-                    })}
-                  </div>
+                      </DataCard>
+                    )
+                  })}
                 </div>
               )}
 
@@ -1687,7 +1736,7 @@ function ReportEditor({ document }) {
                         '—'
                       )
                   },
-                  { label: 'Изделие', cell: r => itemText(r.item) },
+                  { label: 'Изделие', mobileFull: true, cell: r => itemText(r.item) },
                   { label: 'Комплектов', align: 'right', cell: r => number(r.quantity) },
                   {
                     label: 'Расценка',
@@ -1697,6 +1746,7 @@ function ReportEditor({ document }) {
                   {
                     label: 'Начислено',
                     align: 'right',
+                    mobileAccent: true,
                     cell: r => (r.rate !== undefined ? money(r.rate * r.quantity) : '—')
                   },
                   ...(editable
@@ -1704,6 +1754,7 @@ function ReportEditor({ document }) {
                         {
                           label: 'Действия',
                           align: 'right',
+                          mobileKind: 'actions',
                           cell: r => (
                             <Button kind="ghost" onClick={() => setEdit({ kind: 'assignment', original: r })}>
                               Изменить
@@ -1713,6 +1764,17 @@ function ReportEditor({ document }) {
                       ]
                     : [])
                 ]}
+                mobileSummary={
+                  assigned.length > 0
+                    ? {
+                        title: 'Итого по технологической карте',
+                        rows: [
+                          { label: 'Комплектов', value: number(assigned.reduce((s, r) => s + r.quantity, 0)) },
+                          { label: 'Начислено', value: money(totalPieceWages), strong: true }
+                        ]
+                      }
+                    : null
+                }
                 footer={
                   assigned.length > 0 ? (
                     <tr>
@@ -1728,121 +1790,131 @@ function ReportEditor({ document }) {
                 }
               />
               {editable && (
-                <div className="report-totals">
+                <div className="left-actions mobile-full-action">
                   <Button
                     disabled={!products.length || totalUnassigned === 0 || !eligibleWorkers.length}
                     onClick={() => setEdit({ kind: 'assignment' })}
                   >
                     Назначить исполнителя
                   </Button>
-                  {totalUnassigned > 0 && (
-                    <span className="muted">
-                      Нераспределённый остаток: <strong>{number(totalUnassigned)} компл.</strong>
-                    </span>
-                  )}
                 </div>
               )}
             </>
           )}
 
           {(editable || hourlyRows.length > 0) && (
-            <Section
-              title="Дополнительная работа · Грузчик"
-              subtitle={'Почасовая оплата по ставке ' + money(loaderRate) + '/ч · доступен любой действующий сотрудник'}
-              actions={
-                editable ? (
-                  <Button
-                    size="small"
-                    disabled={hourlyRows.length >= eligibleHourlyWorkers.length}
-                    onClick={() => setEdit({ kind: 'hourly' })}
-                  >
-                    Добавить работу грузчиком
-                  </Button>
-                ) : null
-              }
-            >
-              <Table
-                label="Почасовая работа грузчиком"
-                rows={hourlyRows}
-                rowKey={r => r.staff_id + '-' + r.work_type}
-                rowHref={!editable ? r => '/people/' + r.staff_id : undefined}
-                empty="Почасовая работа грузчиком в этой смене не указывалась"
-                columns={[
-                  {
-                    label: 'Сотрудник',
-                    primary: true,
-                    cell: r => (
-                      <>
-                        <a href={href('/people/' + r.staff_id)}>{r.name}</a>
-                        {(r.position || r.stage) && (
-                          <span className="cell-secondary">
-                            {[r.position, stages[r.stage]].filter(Boolean).join(' · ')}
-                          </span>
-                        )}
-                      </>
-                    )
-                  },
-                  { label: 'Вид работы', cell: r => hourlyWorkLabels[r.work_type] || 'Грузчик' },
-                  { label: 'Время', align: 'right', className: 'nowrap', cell: r => duration(r.minutes) },
-                  { label: 'Ставка', align: 'right', className: 'nowrap', cell: r => money(r.hourly_rate) + '/ч' },
-                  { label: 'Начислено', align: 'right', className: 'nowrap', cell: r => money(r.amount) },
-                  ...(editable
-                    ? [
-                        {
-                          label: 'Действия',
-                          align: 'right',
-                          cell: r => (
-                            <Button kind="ghost" onClick={() => setEdit({ kind: 'hourly', original: r })}>
-                              Изменить
-                            </Button>
-                          )
-                        }
-                      ]
-                    : [])
-                ]}
-                footer={
-                  hourlyRows.length > 0 ? (
-                    <tr>
-                      <th scope="row" colSpan={2}>Итого работа грузчиком</th>
-                      <td className="right nowrap" data-label="Время">
-                        <strong>{duration(totalHourlyMinutes)}</strong>
-                      </td>
-                      <td />
-                      <td className="right nowrap" data-label="Начислено">
-                        <strong>{money(totalHourlyWages)}</strong>
-                      </td>
-                      {editable && <td />}
-                    </tr>
+            <div className="report-subsection">
+              <Section
+                title="Дополнительная работа · Грузчик"
+                subtitle={'Почасовая оплата по ставке ' + money(loaderRate) + '/ч · доступен любой действующий сотрудник'}
+                actions={
+                  editable ? (
+                    <Button
+                      size="small"
+                      disabled={hourlyRows.length >= eligibleHourlyWorkers.length}
+                      onClick={() => setEdit({ kind: 'hourly' })}
+                    >
+                      Добавить работу грузчиком
+                    </Button>
                   ) : null
                 }
-              />
-            </Section>
+              >
+                <Table
+                  label="Почасовая работа грузчиком"
+                  rows={hourlyRows}
+                  rowKey={r => r.staff_id + '-' + r.work_type}
+                  rowHref={!editable ? r => '/people/' + r.staff_id : undefined}
+                  empty="Почасовая работа грузчиком в этой смене не указывалась"
+                  columns={[
+                    {
+                      label: 'Сотрудник',
+                      primary: true,
+                      cell: r => (
+                        <>
+                          <a href={href('/people/' + r.staff_id)}>{r.name}</a>
+                          {(r.position || r.stage) && (
+                            <span className="cell-secondary">
+                              {[r.position, stages[r.stage]].filter(Boolean).join(' · ')}
+                            </span>
+                          )}
+                        </>
+                      )
+                    },
+                    {
+                      label: 'Вид работы',
+                      mobileHide: true,
+                      cell: r => hourlyWorkLabels[r.work_type] || 'Грузчик'
+                    },
+                    { label: 'Время', align: 'right', className: 'nowrap', cell: r => duration(r.minutes) },
+                    { label: 'Ставка', align: 'right', className: 'nowrap', cell: r => money(r.hourly_rate) + '/ч' },
+                    {
+                      label: 'Начислено',
+                      align: 'right',
+                      className: 'nowrap',
+                      mobileAccent: true,
+                      cell: r => money(r.amount)
+                    },
+                    ...(editable
+                      ? [
+                          {
+                            label: 'Действия',
+                            align: 'right',
+                            mobileKind: 'actions',
+                            cell: r => (
+                              <Button kind="ghost" onClick={() => setEdit({ kind: 'hourly', original: r })}>
+                                Изменить
+                              </Button>
+                            )
+                          }
+                        ]
+                      : [])
+                  ]}
+                  mobileSummary={
+                    hourlyRows.length > 0
+                      ? {
+                          title: 'Итого работа грузчиком',
+                          rows: [
+                            { label: 'Время', value: duration(totalHourlyMinutes) },
+                            { label: 'Начислено', value: money(totalHourlyWages), strong: true }
+                          ]
+                        }
+                      : null
+                  }
+                  footer={
+                    hourlyRows.length > 0 ? (
+                      <tr>
+                        <th scope="row" colSpan={2}>Итого работа грузчиком</th>
+                        <td className="right nowrap" data-label="Время">
+                          <strong>{duration(totalHourlyMinutes)}</strong>
+                        </td>
+                        <td />
+                        <td className="right nowrap" data-label="Начислено">
+                          <strong>{money(totalHourlyWages)}</strong>
+                        </td>
+                        {editable && <td />}
+                      </tr>
+                    ) : null
+                  }
+                />
+              </Section>
+            </div>
           )}
 
           {assigned.length > 0 && hourlyRows.length > 0 && (
-            <div className="surface-panel">
-              <strong>Итого начислений по смене</strong>
-              <div className="calc-summary">
-                <div className="calc-summary-row">
-                  <span>Сдельная оплата</span>
-                  <strong>{money(totalPieceWages)}</strong>
-                </div>
-                <div className="calc-summary-row">
-                  <span>Работа грузчиком ({duration(totalHourlyMinutes)})</span>
-                  <strong>{money(totalHourlyWages)}</strong>
-                </div>
-                <div className="calc-summary-total">
-                  <span>Всего по отчёту</span>
-                  <strong>{money(totalAllWages)}</strong>
-                </div>
-              </div>
-            </div>
+            <SummaryCard
+              title="Итого начислений по смене"
+              rows={[
+                { label: 'Сдельная оплата', value: money(totalPieceWages) },
+                { label: 'Работа грузчиком (' + duration(totalHourlyMinutes) + ')', value: money(totalHourlyWages) },
+                { label: 'Всего по отчёту', value: money(totalAllWages), strong: true }
+              ]}
+            />
           )}
         </>
       )}
 
       {editable && (
-        <div className="surface-panel">
+        <div className="form-flat">
           <Field label="Комментарий (необязательно)" wide>
             <textarea
               value={report.memo}
@@ -1884,17 +1956,16 @@ function ReportEditor({ document }) {
           </Button>
         </div>
       ) : (
-        <div className="action-row action-pair">
-          <Button kind="ghost" className="push-left" to="/reports">
-            Назад
-          </Button>
-          {canCorrect && (
-            <Button onClick={() => setConfirm('correct')}>Исправить отчёт</Button>
-          )}
-          {document?.status === 'posted' && write && minDate && document.date < minDate && (
-            <span className="muted">Период закрыт для исправления</span>
-          )}
-        </div>
+        (canCorrect || (document?.status === 'posted' && write && minDate && document.date < minDate)) && (
+          <div className="action-row">
+            {canCorrect && (
+              <Button onClick={() => setConfirm('correct')}>Исправить отчёт</Button>
+            )}
+            {document?.status === 'posted' && write && minDate && document.date < minDate && (
+              <span className="muted">Период закрыт для исправления</span>
+            )}
+          </div>
+        )
       )}
 
       {document && <DocumentHistory document={{ ...document, movements: [] }} defaultOpen={document.status !== 'draft'} />}
@@ -2103,7 +2174,7 @@ export function ReportMovements({ id }) {
               (statuses[d.status] || d.status) +
               (hasMovementsOrLines ? ' · Списание: ' + sourceLabel : '')
             }
-            actions={<Button to={'/reports/' + d.id}>К отчёту</Button>}
+            actions={<Button className="desktop-only" to={'/reports/' + d.id}>К отчёту</Button>}
           >
             <DocumentRelationBanner document={d} />
             {hasMovementsOrLines ? (
@@ -2123,6 +2194,7 @@ export function ReportMovements({ id }) {
                   columns={[
                     {
                       label: 'Склад',
+                      mobileFull: true,
                       cell: r => <a href={href('/stock/' + r.warehouse_id)}>{r.warehouse}</a>
                     },
                     {
@@ -2162,6 +2234,7 @@ export function ReportMovements({ id }) {
                     {
                       label: 'Остаток',
                       align: 'right',
+                      mobileAccent: true,
                       cell: r => qty(r.balance_after) + ' ' + r.unit
                     }
                   ]}
@@ -2193,9 +2266,21 @@ export function ReportMovements({ id }) {
                     {
                       label: 'Начислено',
                       align: 'right',
+                      mobileAccent: true,
                       cell: r => money(Math.round((r.quantity * r.rate) / 1000))
                     }
                   ]}
+                  mobileSummary={
+                    assignmentRows.length > 0
+                      ? {
+                          title: 'Итого сдельная',
+                          rows: [
+                            { label: 'Комплектов', value: qty(assignmentRows.reduce((s, r) => s + r.quantity, 0)) },
+                            { label: 'Начислено', value: money(pieceTotal), strong: true }
+                          ]
+                        }
+                      : null
+                  }
                   footer={
                     assignmentRows.length > 0 ? (
                       <tr>
@@ -2212,66 +2297,76 @@ export function ReportMovements({ id }) {
               </Section>
             )}
             {hourlyRows.length > 0 && (
-              <Section title="Дополнительная работа · Грузчик (почасовая)">
-                <Table
-                  label="Почасовая работа грузчиком"
-                  rows={hourlyRows}
-                  rowKey={r => r.id || r.staff_id + '-' + r.work_type}
-                  rowHref={r => '/people/' + r.staff_id}
-                  empty="Почасовой работы нет"
-                  columns={[
-                    {
-                      label: 'Сотрудник',
-                      primary: true,
-                      cell: r => (
-                        <>
-                          <a href={href('/people/' + r.staff_id)}>{r.name}</a>
-                          {(r.position || r.stage) && (
-                            <span className="cell-secondary">
-                              {[r.position, stages[r.stage]].filter(Boolean).join(' · ')}
-                            </span>
-                          )}
-                        </>
-                      )
-                    },
-                    { label: 'Вид работы', cell: r => hourlyWorkLabels[r.work_type] || 'Грузчик' },
-                    { label: 'Время', align: 'right', className: 'nowrap', cell: r => duration(r.minutes) },
-                    { label: 'Ставка', align: 'right', className: 'nowrap', cell: r => money(r.hourly_rate) + '/ч' },
-                    { label: 'Начислено', align: 'right', className: 'nowrap', cell: r => money(r.amount) }
-                  ]}
-                  footer={
-                    <tr>
-                      <th scope="row" colSpan={2}>Итого работа грузчиком</th>
-                      <td className="right nowrap" data-label="Время">
-                        <strong>{duration(hourlyMinutesTotal)}</strong>
-                      </td>
-                      <td />
-                      <td className="right nowrap" data-label="Начислено">
-                        <strong>{money(hourlyAmountTotal)}</strong>
-                      </td>
-                    </tr>
-                  }
-                />
-              </Section>
+              <div className="report-subsection">
+                <Section title="Дополнительная работа · Грузчик (почасовая)">
+                  <Table
+                    label="Почасовая работа грузчиком"
+                    rows={hourlyRows}
+                    rowKey={r => r.id || r.staff_id + '-' + r.work_type}
+                    rowHref={r => '/people/' + r.staff_id}
+                    empty="Почасовой работы нет"
+                    columns={[
+                      {
+                        label: 'Сотрудник',
+                        primary: true,
+                        cell: r => (
+                          <>
+                            <a href={href('/people/' + r.staff_id)}>{r.name}</a>
+                            {(r.position || r.stage) && (
+                              <span className="cell-secondary">
+                                {[r.position, stages[r.stage]].filter(Boolean).join(' · ')}
+                              </span>
+                            )}
+                          </>
+                        )
+                      },
+                      {
+                        label: 'Вид работы',
+                        mobileHide: true,
+                        cell: r => hourlyWorkLabels[r.work_type] || 'Грузчик'
+                      },
+                      { label: 'Время', align: 'right', className: 'nowrap', cell: r => duration(r.minutes) },
+                      { label: 'Ставка', align: 'right', className: 'nowrap', cell: r => money(r.hourly_rate) + '/ч' },
+                      {
+                        label: 'Начислено',
+                        align: 'right',
+                        className: 'nowrap',
+                        mobileAccent: true,
+                        cell: r => money(r.amount)
+                      }
+                    ]}
+                    mobileSummary={{
+                      title: 'Итого работа грузчиком',
+                      rows: [
+                        { label: 'Время', value: duration(hourlyMinutesTotal) },
+                        { label: 'Начислено', value: money(hourlyAmountTotal), strong: true }
+                      ]
+                    }}
+                    footer={
+                      <tr>
+                        <th scope="row" colSpan={2}>Итого работа грузчиком</th>
+                        <td className="right nowrap" data-label="Время">
+                          <strong>{duration(hourlyMinutesTotal)}</strong>
+                        </td>
+                        <td />
+                        <td className="right nowrap" data-label="Начислено">
+                          <strong>{money(hourlyAmountTotal)}</strong>
+                        </td>
+                      </tr>
+                    }
+                  />
+                </Section>
+              </div>
             )}
             {assignmentRows.length > 0 && hourlyRows.length > 0 && (
-              <div className="surface-panel">
-                <strong>Итого начислений по отчёту</strong>
-                <div className="calc-summary">
-                  <div className="calc-summary-row">
-                    <span>Сдельная оплата</span>
-                    <strong>{money(pieceTotal)}</strong>
-                  </div>
-                  <div className="calc-summary-row">
-                    <span>Работа грузчиком ({duration(hourlyMinutesTotal)})</span>
-                    <strong>{money(hourlyAmountTotal)}</strong>
-                  </div>
-                  <div className="calc-summary-total">
-                    <span>Всего по документу</span>
-                    <strong>{money(d.wages)}</strong>
-                  </div>
-                </div>
-              </div>
+              <SummaryCard
+                title="Итого начислений по отчёту"
+                rows={[
+                  { label: 'Сдельная оплата', value: money(pieceTotal) },
+                  { label: 'Работа грузчиком (' + duration(hourlyMinutesTotal) + ')', value: money(hourlyAmountTotal) },
+                  { label: 'Всего по документу', value: money(d.wages), strong: true }
+                ]}
+              />
             )}
             <DocumentHistory document={{ ...d, movements: [] }} defaultOpen />
           </Page>

@@ -201,14 +201,35 @@ export function useAnchoredPopover({
       const vh = vv ? vv.height : window.innerHeight
       const vTop = vv ? vv.offsetTop : 0
       const vLeft = vv ? vv.offsetLeft : 0
+      const isMobileViewport = vw <= 768
       const isNarrow = narrowFullWidth && vw <= 640
       const margin = isNarrow ? 8 : 10
 
-      const spaceAbove = Math.max(56, rect.top - vTop - margin)
-      const spaceBelow = Math.max(56, vTop + vh - rect.bottom - margin)
-      const above = spaceBelow < flipThreshold && spaceAbove > spaceBelow
+      let bottomLimit = vTop + vh - margin
+      let hasContainerFooter = false
+      if (isMobileViewport) {
+        const container = anchor.closest('dialog[open], .sheet-panel')
+        const footerEl =
+          container?.querySelector(':scope > .dialog-shell > .dialog-footer, :scope > .sheet-footer') ||
+          container?.querySelector('.dialog-footer, .sheet-footer')
+        if (footerEl) {
+          const footerRect = footerEl.getBoundingClientRect()
+          if (footerRect.height > 0 && footerRect.top > rect.top) {
+            bottomLimit = Math.min(bottomLimit, footerRect.top - 8)
+            hasContainerFooter = true
+          }
+        }
+      }
+
+      const spaceAbove = Math.max(56, rect.top - vTop - margin - gap)
+      const rawSpaceBelow = bottomLimit - rect.bottom - gap
+      const spaceBelow = Math.max(0, rawSpaceBelow)
+      const effectiveFlip = hasContainerFooter ? Math.min(flipThreshold, 110) : flipThreshold
+      const above = rawSpaceBelow < effectiveFlip && spaceAbove > rawSpaceBelow
       const capHeight = isNarrow ? Math.min(240, maxHeight) : maxHeight
-      const computedMaxHeight = Math.max(96, Math.min(capHeight, above ? spaceAbove : spaceBelow))
+      const minBound = hasContainerFooter && !above ? 56 : 96
+      const available = above ? spaceAbove : Math.max(minBound, spaceBelow)
+      const computedMaxHeight = Math.max(minBound, Math.min(capHeight, available))
 
       let style
       if (isNarrow) {
@@ -216,7 +237,7 @@ export function useAnchoredPopover({
         style = {
           left: Math.round(vLeft + margin),
           width: Math.round(width),
-          maxHeight: Math.round(computedMaxHeight)
+          maxHeight: Math.floor(computedMaxHeight)
         }
       } else if (fixedWidth) {
         const width = Math.min(fixedWidth, vw - margin * 2)
@@ -224,7 +245,7 @@ export function useAnchoredPopover({
         style = {
           left: Math.round(left),
           width: Math.round(width),
-          maxHeight: Math.round(computedMaxHeight)
+          maxHeight: Math.floor(computedMaxHeight)
         }
       } else {
         const effectiveMin = Math.max(rect.width, minWidth)
@@ -235,7 +256,7 @@ export function useAnchoredPopover({
           left: Math.round(left),
           minWidth: Math.round(Math.min(effectiveMin, vw - margin * 2)),
           maxWidth: Math.round(vw - margin * 2),
-          maxHeight: Math.round(computedMaxHeight)
+          maxHeight: Math.floor(computedMaxHeight)
         }
       }
 
@@ -252,12 +273,17 @@ export function useAnchoredPopover({
       place()
     }
 
+    const container = anchorRef?.current?.closest('dialog[open], .sheet-panel')
     place()
+    const rafId = typeof window.requestAnimationFrame === 'function' ? window.requestAnimationFrame(place) : 0
+    container?.addEventListener('animationend', place)
     window.addEventListener('resize', place)
     window.visualViewport?.addEventListener('resize', place)
     window.visualViewport?.addEventListener('scroll', place)
     document.addEventListener('scroll', onScroll, true)
     return () => {
+      if (rafId) window.cancelAnimationFrame(rafId)
+      container?.removeEventListener('animationend', place)
       window.removeEventListener('resize', place)
       window.visualViewport?.removeEventListener('resize', place)
       window.visualViewport?.removeEventListener('scroll', place)
@@ -1554,6 +1580,131 @@ export function EmptyState({ icon, title = 'Записей пока нет', des
   )
 }
 
+function hasRenderableContent(node) {
+  if (node === null || node === undefined || typeof node === 'boolean') return false
+  if (typeof node === 'string') return node.trim().length > 0
+  if (typeof node === 'number') return true
+  if (Array.isArray(node)) return node.some(hasRenderableContent)
+  if (React.isValidElement(node)) {
+    if (node.type === React.Fragment) return hasRenderableContent(node.props?.children)
+    if (typeof node.type === 'string' && ['div', 'span'].includes(node.type)) {
+      if ('children' in (node.props || {})) return hasRenderableContent(node.props.children)
+      return false
+    }
+    return true
+  }
+  return Boolean(node)
+}
+
+export function DataCard({
+  title,
+  subtitle,
+  badge,
+  accent,
+  items = [],
+  actions,
+  href,
+  onClick,
+  className = '',
+  children
+}) {
+  const clickable = Boolean(href || onClick)
+  const hasTitle = hasRenderableContent(title)
+  const hasSubtitle = hasRenderableContent(subtitle)
+  const hasBadge = hasRenderableContent(badge)
+  const hasAccent = hasRenderableContent(accent)
+  const hasHead = hasTitle || hasSubtitle || hasBadge || hasAccent
+  const hasActions = hasRenderableContent(actions)
+  const visibleItems = (items || []).filter(
+    item => item && item.value !== null && item.value !== undefined && item.value !== false
+  )
+
+  function handleClick(e) {
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+    if (window.getSelection?.()?.toString().trim()) return
+    if (e.target.closest('a, button, input, select, textarea, label, [role="button"], [role="option"]')) return
+    if (onClick) onClick(e)
+    else if (href) go(href)
+  }
+
+  return (
+    <article
+      className={'data-card' + (clickable ? ' is-clickable' : '') + (className ? ' ' + className : '')}
+      onClick={clickable ? handleClick : undefined}
+    >
+      {hasHead && (
+        <div className="data-card-head">
+          <div className="data-card-title-wrap">
+            {hasTitle && <div className="data-card-title">{title}</div>}
+            {hasSubtitle && <div className="data-card-subtitle">{subtitle}</div>}
+          </div>
+          {(hasBadge || hasAccent) && (
+            <div className="data-card-right">
+              {hasBadge ? badge : <span className="data-card-accent">{accent}</span>}
+            </div>
+          )}
+        </div>
+      )}
+      {visibleItems.length > 0 && (
+        <div className="data-card-grid" data-cols={visibleItems.length === 1 ? '1' : '2'}>
+          {visibleItems.map((item, idx) => (
+            <div
+              key={item.key ?? item.label ?? idx}
+              className={'data-card-item' + (item.full || visibleItems.length === 1 ? ' is-full' : '')}
+            >
+              {item.label !== null && item.label !== undefined && item.label !== '' && (
+                <span className="data-card-label">{item.label}</span>
+              )}
+              <span
+                className={
+                  'data-card-value' +
+                  (item.strong ? ' is-strong' : '') +
+                  (item.tone ? ' is-' + item.tone : '')
+                }
+              >
+                {item.value}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {children}
+      {hasActions && <div className="data-card-actions">{actions}</div>}
+    </article>
+  )
+}
+
+export function SummaryCard({ title, rows = [], note, className = '' }) {
+  const visibleRows = (rows || []).filter(
+    row => row && row.value !== null && row.value !== undefined && row.value !== false
+  )
+  return (
+    <div className={'data-card data-card-summary' + (className ? ' ' + className : '')}>
+      {title && <div className="data-card-summary-title">{title}</div>}
+      {visibleRows.map((row, idx) => (
+        <div
+          key={row.key ?? row.label ?? idx}
+          className={'data-card-summary-row' + (row.strong ? ' is-strong' : '') + (row.muted ? ' is-muted' : '')}
+        >
+          <span className="data-card-summary-label">{row.label}</span>
+          <span className="data-card-summary-value">{row.value}</span>
+        </div>
+      ))}
+      {note && <div className="data-card-summary-note">{note}</div>}
+    </div>
+  )
+}
+
+function getColumnMobileKind(col) {
+  if (col.mobileHide || col.mobileKind === 'hide') return 'hide'
+  if (col.mobileKind) return col.mobileKind
+  if (col.mobileAccent) return 'accent'
+  if (col.kind) return col.kind
+  if (['Действия', ''].includes(col.label)) return 'actions'
+  if (col.label === 'Статус') return 'status'
+  return undefined
+}
+
 export function Table({
   columns,
   rows,
@@ -1564,12 +1715,18 @@ export function Table({
   hasPager = false,
   flush = false,
   mobileCards = true,
+  mobileSummary = null,
   footer = null,
   className = '',
   onRowClick
 }) {
+  const isMobile = useIsMobile(768)
   const explicitPrimary = columns.findIndex(c => c.primary)
-  const primaryIndex = explicitPrimary >= 0 ? explicitPrimary : 0
+  const fallbackPrimary = columns.findIndex(c => {
+    const k = getColumnMobileKind(c)
+    return k !== 'actions' && k !== 'status' && k !== 'hide' && c.mobileSubtitle !== true
+  })
+  const primaryIndex = explicitPrimary >= 0 ? explicitPrimary : (fallbackPrimary >= 0 ? fallbackPrimary : 0)
 
   function handleRowClick(e, row, i, targetHref) {
     if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
@@ -1577,6 +1734,163 @@ export function Table({
     if (e.target.closest('a, button, input, select, textarea, label, [role="button"], [role="option"]')) return
     if (onRowClick) onRowClick(row, i)
     else if (targetHref) go(targetHref)
+  }
+
+  if (isMobile && mobileCards) {
+    const primaryCol = columns[primaryIndex]
+    const summaryConfig = mobileSummary
+      ? (Array.isArray(mobileSummary) ? { rows: mobileSummary } : mobileSummary)
+      : null
+    const hasSummary = Boolean(
+      summaryConfig && ((summaryConfig.rows && summaryConfig.rows.length > 0) || summaryConfig.note)
+    )
+
+    return (
+      <div
+        className={'mobile-card-list' + (hasPager ? ' has-pagination' : '') + (className ? ' ' + className : '')}
+        role="region"
+        aria-label={label}
+      >
+        {!rows.length ? (
+          <div className="data-card data-card-empty">
+            {typeof empty === 'string' ? <EmptyState title={empty} /> : empty}
+          </div>
+        ) : (
+          rows.map((row, i) => {
+            const targetHref = rowHref ? rowHref(row, i) : null
+            const title = primaryCol ? primaryCol.cell(row, i) : null
+
+            const subtitleParts = []
+            if (primaryCol) {
+              if (typeof primaryCol.mobileSubtitle === 'function') {
+                const sub = primaryCol.mobileSubtitle(row, i)
+                if (hasRenderableContent(sub)) subtitleParts.push(sub)
+              } else if (typeof primaryCol.mobileSubtitle === 'string' && primaryCol.mobileSubtitle) {
+                subtitleParts.push(primaryCol.mobileSubtitle)
+              }
+            }
+            for (let j = 0; j < columns.length; j++) {
+              if (j === primaryIndex) continue
+              const col = columns[j]
+              if (col.mobileSubtitle === true) {
+                const sub = col.cell(row, i)
+                if (hasRenderableContent(sub)) subtitleParts.push(sub)
+              } else if (typeof col.mobileSubtitle === 'function') {
+                const sub = col.mobileSubtitle(row, i)
+                if (hasRenderableContent(sub)) subtitleParts.push(sub)
+              }
+            }
+            const subtitle = subtitleParts.length === 0
+              ? undefined
+              : subtitleParts.length === 1
+                ? subtitleParts[0]
+                : subtitleParts.flatMap((part, idx) => (
+                  idx
+                    ? [' · ', <React.Fragment key={idx}>{part}</React.Fragment>]
+                    : [<React.Fragment key={idx}>{part}</React.Fragment>]
+                ))
+
+            let badge = null
+            let badgeColIndex = -1
+            for (let j = 0; j < columns.length; j++) {
+              if (j === primaryIndex) continue
+              const col = columns[j]
+              if (col.mobileSubtitle === true) continue
+              if (getColumnMobileKind(col) === 'status') {
+                const val = col.cell(row, i)
+                if (hasRenderableContent(val)) {
+                  badge = val
+                  badgeColIndex = j
+                  break
+                }
+              }
+            }
+
+            let accent = null
+            const items = []
+            const actionNodes = []
+
+            for (let j = 0; j < columns.length; j++) {
+              if (j === primaryIndex || j === badgeColIndex) continue
+              const col = columns[j]
+              if (col.mobileSubtitle === true) continue
+              const kind = getColumnMobileKind(col)
+              if (kind === 'hide') continue
+
+              if (kind === 'actions') {
+                const act = col.cell(row, i)
+                if (hasRenderableContent(act)) actionNodes.push(act)
+                continue
+              }
+
+              const val = col.cell(row, i)
+              if (val === null || val === undefined || val === false) continue
+
+              if (kind === 'accent') {
+                if (!badge && accent === null && hasRenderableContent(val)) {
+                  accent = val
+                } else {
+                  items.push({
+                    key: col.label || j,
+                    label: col.label,
+                    value: val,
+                    full: Boolean(col.mobileFull),
+                    strong: true,
+                    tone: typeof col.mobileTone === 'function' ? col.mobileTone(row, i) : col.mobileTone
+                  })
+                }
+                continue
+              }
+
+              items.push({
+                key: col.label || j,
+                label: col.label,
+                value: val,
+                full: Boolean(col.mobileFull),
+                strong: Boolean(col.mobileStrong),
+                tone: typeof col.mobileTone === 'function' ? col.mobileTone(row, i) : col.mobileTone
+              })
+            }
+
+            const actions = actionNodes.length === 0
+              ? null
+              : actionNodes.length === 1
+                ? actionNodes[0]
+                : actionNodes.map((node, idx) => <React.Fragment key={idx}>{node}</React.Fragment>)
+
+            return (
+              <DataCard
+                key={rowKey?.(row) ?? row.id ?? row.item_id ?? i}
+                title={title}
+                subtitle={subtitle}
+                badge={badge}
+                accent={accent}
+                items={items}
+                actions={actions}
+                href={targetHref || undefined}
+                onClick={onRowClick ? () => onRowClick(row, i) : undefined}
+              />
+            )
+          })
+        )}
+        {mobileSummary ? (
+          hasSummary ? (
+            <SummaryCard
+              title={summaryConfig.title}
+              rows={summaryConfig.rows || []}
+              note={summaryConfig.note}
+              className={summaryConfig.className || ''}
+            />
+          ) : null
+        ) : footer ? (
+          <div className="data-card data-card-summary data-card-footer-fallback">
+            <table className="mobile-summary-table">
+              <tfoot>{footer}</tfoot>
+            </table>
+          </div>
+        ) : null}
+      </div>
+    )
   }
 
   return (
@@ -1646,7 +1960,7 @@ export function Table({
 }
 
 export function Pager({ page, size = 15, total, change, onSizeChange, pageSizes = [15, 30, 50] }) {
-  const isMobile = useIsMobile(767)
+  const isMobile = useIsMobile(768)
   const end = Math.max(1, Math.ceil(total / size))
   if (!total) return null
   const safePage = Math.max(1, Math.min(page, end))
@@ -1923,7 +2237,7 @@ export function QuickFilters({ active = false, activeCount = 0, label = 'Быс�
   )
 }
 
-export function RegistryTools({ state, placeholder, periodLabel = false, total, filterLabels, children }) {
+export function RegistryTools({ state, placeholder, periodLabel = false, periodPlacement = 'chips', total, filterLabels, children }) {
   const { filters, initial = {}, change, update, hasFilters, reset } = state
   const ws = useWorkspace()
   const items = ws?.items || []
@@ -1978,8 +2292,9 @@ export function RegistryTools({ state, placeholder, periodLabel = false, total, 
   const chips = []
   const hasDateFilter = Boolean(filters.start || filters.end)
   const dateChanged = (filters.start || '') !== (initial.start || '') || (filters.end || '') !== (initial.end || '')
-  if (periodLabel || hasDateFilter) {
-    const canRemoveDate = dateChanged || (hasDateFilter && !initial.start && !initial.end)
+  const showPeriod = Boolean(periodLabel || hasDateFilter)
+  const canRemoveDate = dateChanged || (hasDateFilter && !initial.start && !initial.end)
+  if (showPeriod && periodPlacement !== 'header') {
     chips.push({
       key: 'period',
       label: 'Период',
@@ -2021,6 +2336,8 @@ export function RegistryTools({ state, placeholder, periodLabel = false, total, 
   }
 
   const activeCount = (dateChanged ? 1 : 0) + chips.filter(c => c.key !== 'period' && c.removable).length
+  const hasNonDateFilters = Object.keys(initial).some(k => !['search', 'start', 'end'].includes(k) && filters[k] !== initial[k])
+  const showFilterRow = chips.length > 0 || (periodPlacement === 'header' ? hasNonDateFilters : hasFilters)
 
   return (
     <div className="registry-controls">
@@ -2065,7 +2382,24 @@ export function RegistryTools({ state, placeholder, periodLabel = false, total, 
           <span className="registry-result-count" role="status">Найдено: {number(total)}</span>
         )}
       </div>
-      {(chips.length > 0 || hasFilters) && (
+      {periodPlacement === 'header' && showPeriod && (
+        <div className="registry-period-bar">
+          <span className="registry-period-text">
+            Период: <strong>{dateCaption}</strong>
+          </span>
+          {canRemoveDate && (
+            <button
+              type="button"
+              className="text-button registry-period-clear"
+              aria-label={`Снять фильтр: Период — ${dateCaption}`}
+              onClick={() => clearKeys(['start', 'end'])}
+            >
+              Сбросить
+            </button>
+          )}
+        </div>
+      )}
+      {showFilterRow && (
         <div className="registry-filter-row">
           <div className="filter-chips">
             {chips.map(chip =>

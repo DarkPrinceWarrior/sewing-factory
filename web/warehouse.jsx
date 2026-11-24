@@ -1,10 +1,10 @@
 import React, {useId, useState} from 'react'
 import {DocumentHistory, Wip} from './production'
 import {
-  ActionRow, Button, Card, Confirm, DateControl, DateRange, Details, Dialog, Download, ErrorBox, Field,
-  FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Section, Select, Status, Stepper, Table, Tabs,
-  api, dateTime, dayText, go, href, itemText, matchesSearch, money, number, payments, qty, roleCanWrite,
-  routeWith, useAction, useFilters, useRemote, useSearchOptions, useToast, useWorkspace
+  ActionRow, Button, Card, Confirm, DataCard, DateControl, DateRange, Details, Dialog, Download, ErrorBox, Field,
+  FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Section, Select, Status, Stepper, SummaryCard,
+  Table, Tabs, api, dateTime, dayText, go, href, itemText, matchesSearch, money, number, payments, qty,
+  roleCanWrite, routeWith, useAction, useFilters, useIsMobile, useRemote, useSearchOptions, useToast, useWorkspace
 } from './ui'
 import {PasswordInput, SearchPicker} from './pickers'
 
@@ -134,6 +134,7 @@ function NewMaterialDialog({close, done}) {
 
 function CentralInventory({add, setAdd}) {
   const ws = useWorkspace()
+  const isMobile = useIsMobile(768)
   const isMaster = ws.user.role === 'master'
   const canWrite = roleCanWrite(ws.user)
   const internal = ws.warehouses.filter(w => ['cut', 'sew', 'pack'].includes(w.kind))
@@ -147,7 +148,7 @@ function CentralInventory({add, setAdd}) {
     {
       label: 'Склад',
       primary: true,
-      width: canWrite ? '26%' : '30%',
+      width: '32%',
       cell: w => (
         <>
           <a href={href('/stock/' + w.id)}>{w.name}</a>
@@ -155,28 +156,24 @@ function CentralInventory({add, setAdd}) {
         </>
       )
     },
-    {label: 'Город', width: '14%', cell: w => nowrap(w.city)},
-    {label: 'Назначение', width: '21%', cell: w => w.kind === 'regional' ? 'Готовая продукция' : purposes[w.kind]},
+    {label: 'Город', mobileSubtitle: true, width: '15%', cell: w => nowrap(w.city)},
+    {label: 'Назначение', width: '23%', cell: w => w.kind === 'regional' ? 'Готовая продукция' : purposes[w.kind]},
     {
       label: 'Остаток',
       align: 'right',
-      width: '13%',
+      width: '15%',
       cell: w => w.kind === 'raw' ? number(w.positions) + ' позиций' : qty(w.quantity) + ' компл.'
     },
-    {label: 'Стоимость', align: 'right', width: '14%', cell: w => money(w.value)},
-    ...(canWrite ? [{
-      label: 'Действия',
-      align: 'right',
-      width: '12%',
-      cell: w => w.kind === 'finished'
-        ? <Button kind="ghost" size="small" to="/stock/transfers/new">Переместить</Button>
-        : w.kind === 'raw'
-          ? <Button kind="ghost" size="small" to="/stock/receipts/new">Принять сырьё</Button>
-          : null
-    }] : [])
+    {label: 'Стоимость', align: 'right', mobileAccent: true, width: '15%', cell: w => money(w.value)}
   ]
 
   const transitPath = routeWith('/stock/transfers', {status: 'in_transit'})
+  const stockActions = canWrite ? (
+    <div className="action-pair">
+      <Button kind="secondary" to="/stock/receipts/new">Принять сырьё</Button>
+      <Button kind="secondary" to="/stock/transfers/new">Переместить</Button>
+    </div>
+  ) : null
 
   return (
     <>
@@ -205,10 +202,17 @@ function CentralInventory({add, setAdd}) {
           ]}
         />
       )}
+      {internal.length > 0 && (
+        <Card title="Внутренние запасы · Иваново">
+          <Wip rows={internal} links/>
+        </Card>
+      )}
       <Section
         className="warehouse-register"
         title={isMaster ? 'Склады · Иваново' : 'Склады по городам'}
+        actions={!isMobile ? stockActions : null}
       >
+        {isMobile && stockActions}
         <RegistryTools state={state} total={rows.length} placeholder="Название, город или адрес"/>
         <Table
           label={isMaster ? 'Склады Иваново' : 'Склады по городам'}
@@ -217,11 +221,6 @@ function CentralInventory({add, setAdd}) {
           rowHref={w => '/stock/' + w.id}
           empty="Склады по этому запросу не найдены"
         />
-      </Section>
-      <Section title="Внутренние запасы · Иваново">
-        <div className="surface-panel">
-          <Wip rows={internal} links/>
-        </div>
       </Section>
       {add && <WarehouseForm close={() => setAdd(false)} done={() => { ws.refresh(); setAdd(false) }}/>}
     </>
@@ -283,9 +282,9 @@ export function WarehouseDetail({id, regional = false}) {
         const w = d.warehouse
         const rows = d.rows.filter(r => matchesSearch(stock.filters.search, r.name, r.size, r.sku, r.category))
         const tabs = [
-          ['stock', 'Текущие остатки'],
-          ['history', 'История движений'],
-          ...(w.kind === 'raw' && roleCanWrite(ws.user) ? [['receipts', 'Документы поступления']] : [])
+          ['stock', 'Остатки'],
+          ['history', 'Движения'],
+          ...(w.kind === 'raw' && roleCanWrite(ws.user) ? [['receipts', 'Поступления']] : [])
         ]
         const selected = tabs.some(([key]) => key === tab) ? tab : 'stock'
         const isRaw = w.kind === 'raw'
@@ -296,21 +295,29 @@ export function WarehouseDetail({id, regional = false}) {
           ...(isRaw
             ? [
                 {label: 'Материал', primary: true, cell: r => <a href={href('/stock/1/items/' + r.item_id)}>{r.name}</a>},
-                {label: 'Единица', cell: r => r.unit},
+                {label: 'Единица', mobileHide: true, cell: r => r.unit},
                 {label: 'На начало дня', align: 'right', cell: r => qty(r.quantity - r.incoming + r.outgoing) + ' ' + r.unit}
               ]
             : [
-                {label: 'Артикул', cell: r => nowrap(r.sku)},
+                {label: 'Артикул', mobileSubtitle: true, cell: r => nowrap(r.sku)},
                 {label: 'Изделие', primary: true, cell: itemText}
               ]),
           {label: 'Поступило сегодня', align: 'right', cell: r => qty(r.incoming) + ' ' + r.unit},
           {label: 'Выбыло сегодня', align: 'right', cell: r => qty(r.outgoing) + ' ' + r.unit},
-          {label: 'Остаток', align: 'right', cell: r => <strong>{qty(r.quantity)} {r.unit}</strong>},
-          {label: regional ? 'Цена продажи' : 'Учётная стоимость', align: 'right', cell: r => money(regional ? r.price : r.value)}
+          {label: 'Остаток', align: 'right', mobileAccent: true, cell: r => <strong>{qty(r.quantity)} {r.unit}</strong>},
+          {
+            label: regional ? 'Цена продажи' : 'Учётная стоимость',
+            align: 'right',
+            mobileFull: !isRaw,
+            cell: r => money(regional ? r.price : r.value)
+          }
         ]
 
         const retailStockTotal = regional
           ? d.rows.reduce((sum, r) => sum + Math.round((r.quantity || 0) * (r.price || 0) / 1000), 0)
+          : 0
+        const filteredRetailTotal = regional
+          ? rows.reduce((sum, r) => sum + Math.round((r.quantity || 0) * (r.price || 0) / 1000), 0)
           : 0
         const inStockPositions = d.rows.filter(r => r.quantity > 0).length
         const transitDocs = incoming.data?.total || 0
@@ -327,14 +334,30 @@ export function WarehouseDetail({id, regional = false}) {
             <td className="right" data-label="Выбыло">{singleUnit ? qty(total(rows, 'outgoing')) + ' ' + singleUnit : '—'}</td>
             <td className="right" data-label="Остаток"><strong>{singleUnit ? qty(total(rows, 'quantity')) + ' ' + singleUnit : '—'}</strong></td>
             <td className="right" data-label={regional ? 'По прайсу' : 'Стоимость'}>
-              <strong>
-                {regional
-                  ? money(rows.reduce((s, r) => s + Math.round((r.quantity || 0) * (r.price || 0) / 1000), 0))
-                  : money(total(rows, 'value'))}
-              </strong>
+              <strong>{regional ? money(filteredRetailTotal) : money(total(rows, 'value'))}</strong>
             </td>
           </tr>
         ) : null
+
+        const mobileSummary = rows.length > 0 ? {
+          title: 'Итого (' + number(rows.length) + ' позиций)',
+          rows: [
+            ...(isRaw && singleUnit ? [{
+              label: 'На начало дня',
+              value: qty(rows.reduce((s, r) => s + r.quantity - r.incoming + r.outgoing, 0)) + ' ' + singleUnit
+            }] : []),
+            ...(singleUnit ? [
+              {label: 'Поступило сегодня', value: qty(total(rows, 'incoming')) + ' ' + singleUnit},
+              {label: 'Выбыло сегодня', value: qty(total(rows, 'outgoing')) + ' ' + singleUnit},
+              {label: 'Остаток', value: qty(total(rows, 'quantity')) + ' ' + singleUnit, strong: true}
+            ] : []),
+            {
+              label: regional ? 'Оценка по прайсу' : 'Учётная стоимость',
+              value: regional ? money(filteredRetailTotal) : money(total(rows, 'value')),
+              strong: true
+            }
+          ]
+        } : null
 
         return (
           <Page
@@ -398,6 +421,7 @@ export function WarehouseDetail({id, regional = false}) {
                   rowHref={isRaw ? (r => '/stock/1/items/' + r.item_id) : undefined}
                   hasPager={rows.length > 0}
                   footer={footer}
+                  mobileSummary={mobileSummary}
                   empty={stock.filters.search ? 'Товары не найдены' : 'На этом складе пока нет остатков'}
                   columns={columns}
                 />
@@ -452,6 +476,7 @@ function StockHistory({id, items, material}) {
         state={state}
         total={pending ? undefined : moves.data?.total}
         periodLabel={Boolean(material)}
+        periodPlacement={material ? 'header' : 'chips'}
         placeholder={material ? 'Номер документа' : 'Документ, изделие или артикул'}
       >
         <DateRange filters={filters} change={change}/>
@@ -476,9 +501,9 @@ function StockHistory({id, items, material}) {
               hasPager={m.total > 0}
               empty="Движений за выбранный период не найдено"
               columns={[
-                {label: 'Дата и время', cell: r => nowrap(dateTime(r.happened_at))},
+                {label: 'Дата и время', mobileSubtitle: true, cell: r => nowrap(dateTime(r.happened_at))},
                 {label: 'Документ', primary: true, cell: moveLink},
-                {label: 'Операция', cell: r => movementName[r.operation] || r.operation},
+                {label: 'Операция', mobileFull: true, cell: r => movementName[r.operation] || r.operation},
                 ...(!material ? [{label: 'Товар', mobileFull: true, cell: itemText}] : []),
                 {
                   label: 'Приход',
@@ -490,7 +515,7 @@ function StockHistory({id, items, material}) {
                   align: 'right',
                   cell: r => r.quantity < 0 ? <span className="negative">−{qty(-r.quantity)} {r.unit}</span> : '—'
                 },
-                ...(!regional ? [{label: 'Стоимость', align: 'right', cell: r => money(r.value)}] : [])
+                ...(!regional ? [{label: 'Стоимость', align: 'right', mobileAccent: true, cell: r => money(r.value)}] : [])
               ]}
             />
             <Pager
@@ -516,6 +541,7 @@ function DocumentFilters({state, kind, regional, total}) {
       state={state}
       total={total}
       periodLabel={kind === 'sale'}
+      periodPlacement={kind === 'sale' ? 'header' : 'chips'}
       placeholder={kind === 'receipt' ? 'Документ, поставщик или материал' : 'Документ, изделие или сотрудник'}
     >
       <DateRange filters={filters} change={change}/>
@@ -557,7 +583,7 @@ function DocumentTable({kind, regional, page, size = 15, setPage, setSize, optio
       primary: true,
       cell: r => nowrap(<a href={href(docUrl(r))}>{r.code}</a>)
     },
-    {label: 'Дата', cell: r => nowrap(kind === 'sale' ? dateTime(r.created_at) : dayText(r.date))},
+    {label: 'Дата', mobileSubtitle: true, cell: r => nowrap(kind === 'sale' ? dateTime(r.created_at) : dayText(r.date))},
     ...(kind === 'transfer'
       ? [{
           label: regional ? 'Отправитель' : 'Склад-получатель',
@@ -584,6 +610,7 @@ function DocumentTable({kind, regional, page, size = 15, setPage, setSize, optio
     {
       label: 'Сумма',
       align: 'right',
+      mobileAccent: true,
       cell: r => kind === 'transfer' && !regional && r.status !== 'draft'
         ? (
           <>
@@ -593,8 +620,13 @@ function DocumentTable({kind, regional, page, size = 15, setPage, setSize, optio
         )
         : money(r.total)
     },
-    {label: 'Статус', align: 'after-number', cell: r => <Status value={r.status} label={kind === 'sale' ? 'Оформлена' : undefined}/>},
-    {label: 'Сотрудник', cell: r => nowrap(r.author)}
+    {
+      label: 'Статус',
+      align: 'after-number',
+      mobileKind: 'status',
+      cell: r => <Status value={r.status} label={kind === 'sale' ? 'Оформлена' : undefined}/>
+    },
+    {label: 'Сотрудник', mobileFull: !(kind === 'sale' && !regional), cell: r => nowrap(r.author)}
   ]
 
   return (
@@ -798,6 +830,16 @@ function SalesOverview({regional = false}) {
                     label="Сводка продаж по городам"
                     rows={d.cities}
                     rowHref={r => '/stock/' + r.id}
+                    mobileSummary={{
+                      title: 'Итого (' + number(d.cities.length) + ' складов)',
+                      rows: [
+                        {label: 'Комплектов', value: qty(d.quantity)},
+                        {label: 'Продаж', value: number(d.documents)},
+                        {label: 'Доля', value: '100%'},
+                        {label: 'Сумма', value: money(d.total), strong: true},
+                        {label: 'Учётная стоимость', value: money(d.cost), strong: true}
+                      ]
+                    }}
                     footer={
                       <tr>
                         <td colSpan={2}><strong>Итого ({number(d.cities.length)} складов)</strong></td>
@@ -810,7 +852,7 @@ function SalesOverview({regional = false}) {
                     }
                     columns={[
                       {label: 'Город', primary: true, cell: r => nowrap(r.city)},
-                      {label: 'Склад', cell: r => <a href={href('/stock/' + r.id)}>{r.name}</a>},
+                      {label: 'Склад', mobileSubtitle: true, cell: r => <a href={href('/stock/' + r.id)}>{r.name}</a>},
                       {label: 'Комплектов', align: 'right', cell: r => qty(r.quantity)},
                       {label: 'Продаж', align: 'right', cell: r => number(r.docs)},
                       {
@@ -818,7 +860,7 @@ function SalesOverview({regional = false}) {
                         align: 'right',
                         cell: r => number(cityTotal ? Math.round((r.total || 0) / cityTotal * 1000) / 10 : 0) + '%'
                       },
-                      {label: 'Сумма', align: 'right', cell: r => <strong>{money(r.total)}</strong>},
+                      {label: 'Сумма', align: 'right', mobileAccent: true, cell: r => <strong>{money(r.total)}</strong>},
                       {label: 'Учётная стоимость', align: 'right', cell: r => money(r.cost)}
                     ]}
                   />
@@ -980,6 +1022,7 @@ function WarehouseAccess({grant, setGrant}) {
                 {
                   label: 'Статус',
                   width: '13%',
+                  mobileKind: 'status',
                   cell: r => (
                     <Status
                       value={r.active && r.warehouse_id ? 'posted' : 'inactive'}
@@ -990,12 +1033,13 @@ function WarehouseAccess({grant, setGrant}) {
                 {
                   label: 'Действия',
                   width: '17%',
-                  cell: r => (
+                  mobileKind: 'actions',
+                  cell: r => (r.active || r.warehouse_id) ? (
                     <div className="row-actions">
                       {r.active && <Button kind="ghost" size="small" onClick={() => setGrant(r)}>Изменить</Button>}
                       {r.warehouse_id && <Button kind="quiet-danger" size="small" onClick={() => setRemove(r)}>Отозвать</Button>}
                     </div>
-                  )
+                  ) : null
                 }
               ]}
             />
@@ -1033,6 +1077,7 @@ const emptyLine = (key) => ({key, item_id: '', quantity: 1, price: ''})
 const makeLines = (rows) => rows.map((l, i) => ({key: i, item_id: l.item_id, quantity: l.quantity / 1000, price: String(l.price / 100)}))
 
 function TransactionLines({lines, setLines, items, mode, onAddMaterial}) {
+  const isMobile = useIsMobile(768)
   const sale = mode === 'sale'
   const receipt = mode === 'receipt'
   const stocked = !receipt
@@ -1114,7 +1159,7 @@ function TransactionLines({lines, setLines, items, mode, onAddMaterial}) {
                 onChange={e => setLine(l.key, {price: e.target.value})}
               />
             </Field>
-            <Field label="Сумма">
+            <Field label="Сумма" wide={isMobile && lines.length === 1}>
               <output className="control-output">{item || l.price ? money(lineSum) : '—'}</output>
             </Field>
             {lines.length > 1 && (
@@ -1131,10 +1176,19 @@ function TransactionLines({lines, setLines, items, mode, onAddMaterial}) {
         )
       })}
       {(canAddLine || (receipt && onAddMaterial)) && (
-        <div className="action-pair">
-          {canAddLine && <Button onClick={add}>Добавить позицию</Button>}
-          {receipt && onAddMaterial && <Button kind="secondary" onClick={onAddMaterial}>Новый материал</Button>}
-        </div>
+        canAddLine && receipt && onAddMaterial ? (
+          <div className="action-pair">
+            <Button onClick={add}>Добавить позицию</Button>
+            <Button kind="secondary" onClick={onAddMaterial}>Новый материал</Button>
+          </div>
+        ) : (
+          <div className="form-flat-section">
+            <div className="left-actions">
+              {canAddLine && <Button onClick={add}>Добавить позицию</Button>}
+              {receipt && onAddMaterial && <Button kind="secondary" onClick={onAddMaterial}>Новый материал</Button>}
+            </div>
+          </div>
+        )
       )}
     </div>
   )
@@ -1258,7 +1312,7 @@ function TransactionEditor({mode, document, inventory, initialSaleWarehouse}) {
       actions={document && <Status value={document.status}/>}
     >
       <Section title={sale ? 'Товар и оплата' : receipt ? 'Поступление от поставщика' : 'Маршрут и товары'}>
-        <div className="surface-panel">
+        <div className="form-flat">
         <form
           id={formId}
           className="document-form"
@@ -1336,32 +1390,36 @@ function TransactionEditor({mode, document, inventory, initialSaleWarehouse}) {
             </div>
           )}
 
-          {sale ? (
-            <Guard request={saleInventory}>
-              {() => (
-                <>
-                  {items.filter(i => i.quantity > 0).length === 0 ? (
-                    <p className="inline-note info">На выбранном складе пока нет готовой продукции в наличии для продажи.</p>
-                  ) : (
-                    <TransactionLines mode={mode} lines={lines} setLines={setLines} items={items}/>
-                  )}
-                </>
-              )}
-            </Guard>
-          ) : (
-            <TransactionLines
-              mode={mode}
-              lines={lines}
-              setLines={setLines}
-              items={items}
-              onAddMaterial={receipt ? () => setNewMaterialOpen(true) : undefined}
-            />
-          )}
+          <div className={!sale || !isRegional ? 'form-flat-section' : undefined}>
+            {sale ? (
+              <Guard request={saleInventory}>
+                {() => (
+                  <>
+                    {items.filter(i => i.quantity > 0).length === 0 ? (
+                      <p className="inline-note info">На выбранном складе пока нет готовой продукции в наличии для продажи.</p>
+                    ) : (
+                      <TransactionLines mode={mode} lines={lines} setLines={setLines} items={items}/>
+                    )}
+                  </>
+                )}
+              </Guard>
+            ) : (
+              <TransactionLines
+                mode={mode}
+                lines={lines}
+                setLines={setLines}
+                items={items}
+                onAddMaterial={receipt ? () => setNewMaterialOpen(true) : undefined}
+              />
+            )}
+          </div>
 
           {sale && (
-            <Field label="Способ оплаты">
-              <Select value={payment} entries={payModes} onChange={e => setPayment(e.target.value)}/>
-            </Field>
+            <div className="form-flat-section">
+              <Field label="Способ оплаты">
+                <Select value={payment} entries={payModes} onChange={e => setPayment(e.target.value)}/>
+              </Field>
+            </div>
           )}
 
           <div className="document-total">
@@ -1393,15 +1451,17 @@ function TransactionEditor({mode, document, inventory, initialSaleWarehouse}) {
             </div>
           )}
 
-          <Field label="Комментарий (необязательно)">
-            <textarea
-              rows={sale ? '2' : '3'}
-              maxLength="500"
-              value={memo}
-              placeholder={sale ? 'Например: скидка, самовывоз или примечание к заказу' : undefined}
-              onChange={e => setMemo(e.target.value)}
-            />
-          </Field>
+          <div className="form-flat-section">
+            <Field label="Комментарий (необязательно)">
+              <textarea
+                rows={sale ? '2' : '3'}
+                maxLength="500"
+                value={memo}
+                placeholder={sale ? 'Например: скидка, самовывоз или примечание к заказу' : undefined}
+                onChange={e => setMemo(e.target.value)}
+              />
+            </Field>
+          </div>
 
           <ErrorBox error={state.error}/>
           <div className="action-row desktop-form-actions">
@@ -1480,17 +1540,13 @@ function TransactionEditor({mode, document, inventory, initialSaleWarehouse}) {
 function DocumentView({d}) {
   const ws = useWorkspace()
   const toast = useToast()
+  const isMobile = useIsMobile(768)
   const [receiveConfirm, setReceiveConfirm] = useState(false)
   const regional = ws.user.role === 'regional'
   const sale = d.kind === 'sale', transfer = d.kind === 'transfer', receipt = d.kind === 'receipt'
   const canReceive = regional && transfer && d.status === 'in_transit'
   const showBookValue = transfer && !regional && d.status !== 'draft'
   const title = (sale ? 'Продажа' : transfer ? (regional ? 'Приёмка' : 'Перемещение') : 'Поступление сырья') + ' ' + d.code
-  const back = sale
-    ? (regional ? '/sales' : '/stock/sales')
-    : transfer
-      ? (regional ? '/receiving' : '/stock/transfers')
-      : '/stock/' + (d.target_id || 1)
   const at = useRemote(canReceive ? '/warehouses/' + ws.user.warehouse_id : null)
 
   const details = sale
@@ -1512,62 +1568,123 @@ function DocumentView({d}) {
           ['Склад', d.target_name + (d.target_city ? ' · ' + d.target_city : '')]
         ]
 
+  const mobileDetailItems = [
+    ...(sale
+      ? [
+          {label: 'Склад', value: d.source_name + ' · ' + d.source_city, full: true},
+          {label: 'Оплата', value: payments[d.payment]},
+          {label: 'Сотрудник', value: d.author}
+        ]
+      : transfer
+        ? [
+            {label: 'Отправитель', value: d.source_name + ' · ' + d.source_city, full: true},
+            ...(!regional ? [{label: 'Склад-получатель', value: d.target_name + ' · ' + d.target_city, full: true}] : []),
+            {label: 'Отправка', value: dayText(d.date), full: !showBookValue},
+            ...(showBookValue ? [{label: 'Учётная стоимость списания', value: money(d.book_value)}] : [])
+          ]
+        : [
+            {label: 'Поставщик', value: d.supplier, full: true},
+            {label: 'Накладная', value: d.reference},
+            {label: 'Склад', value: d.target_name + (d.target_city ? ' · ' + d.target_city : '')}
+          ]),
+    ...(d.memo ? [{label: 'Комментарий', value: d.memo, full: true}] : [])
+  ]
+
+  const lineColumns = [
+    {label: receipt ? 'Материал' : 'Изделие', primary: true, cell: r => r.name},
+    ...(!receipt ? [{label: 'Размер', mobileSubtitle: true, cell: r => nowrap(r.size)}] : []),
+    {label: 'Количество', align: 'right', cell: r => qty(r.quantity) + ' ' + r.unit},
+    {label: sale ? 'Цена за ед.' : transfer ? 'Цена строки за ед.' : 'Стоимость за ед.', align: 'right', cell: r => money(r.price)},
+    {label: 'Сумма', align: 'right', mobileAccent: true, cell: r => <strong>{money(Math.round(r.price * r.quantity / 1000))}</strong>},
+    ...(showBookValue ? [{label: 'Учётная стоимость', align: 'right', mobileFull: !at.data, cell: r => money(r.book_value)}] : []),
+    ...(at.data ? [{
+      label: 'После приёмки',
+      align: 'right',
+      mobileFull: !showBookValue,
+      cell: r => qty((at.data.rows.find(l => l.item_id === r.item_id)?.quantity || 0) + r.quantity) + ' компл.'
+    }] : [])
+  ]
+
+  const bookValueNote = showBookValue
+    ? `Сумма по строкам документа (${money(d.total)}) рассчитана по цене отправки; на баланс регионального склада приходуется учётная стоимость списания в Иваново (${money(d.book_value)}).`
+    : ''
+
   return (
     <Page
       title={title}
       subtitle={sale ? d.source_city + ' · ' + dateTime(d.created_at) : transfer ? d.target_name + ' · ' + d.target_city : dayText(d.date)}
     >
-      <Card
-        className="print-document"
-        title={sale ? 'Документ о продаже' : transfer ? 'Товары отправки' : 'Товары поступления'}
-        actions={<Status value={d.status} label={sale ? 'Оформлена' : undefined}/>}
-      >
-        {receipt || !sale
-          ? <Details values={details}/>
-          : (
-            <div className="print-heading">
-              <h2>Документ о продаже {d.code}</h2>
-              <p>{d.source_name} · {d.source_city} · {dateTime(d.created_at)}</p>
+      {isMobile ? (
+        <div className="doc-view-flat print-document">
+          <DataCard
+            className="doc-view-head-card"
+            title={sale ? 'Детали продажи' : transfer ? 'Маршрут перемещения' : 'Реквизиты поступления'}
+            badge={<Status value={d.status} label={sale ? 'Оформлена' : undefined}/>}
+            items={mobileDetailItems}
+          />
+          <Section title={sale ? 'Товары продажи' : transfer ? 'Товары отправки' : 'Товары поступления'}>
+            <Table
+              rows={d.lines}
+              label={sale ? 'Товары продажи' : 'Товары документа'}
+              columns={lineColumns}
+            />
+          </Section>
+          <SummaryCard
+            rows={[
+              ...(showBookValue ? [{label: 'Учётная стоимость списания', value: money(d.book_value), muted: true}] : []),
+              {label: sale ? 'К оплате' : showBookValue ? 'Всего по документу' : 'Всего', value: money(d.total), strong: true}
+            ]}
+            note={bookValueNote || undefined}
+          />
+          {canReceive && (
+            <p className="inline-note info">Сверьте количество каждой позиции перед подтверждением приёмки.</p>
+          )}
+          {sale && (
+            <div className="action-row">
+              <Button onClick={() => window.print()}>Распечатать</Button>
             </div>
           )}
-        <Table
-          flush
-          rows={d.lines}
-          label={sale ? 'Товары продажи' : 'Товары документа'}
-          columns={[
-            {label: receipt ? 'Материал' : 'Изделие', primary: true, cell: r => r.name},
-            ...(!receipt ? [{label: 'Размер', cell: r => nowrap(r.size)}] : []),
-            {label: 'Количество', align: 'right', cell: r => qty(r.quantity) + ' ' + r.unit},
-            {label: sale ? 'Цена за ед.' : transfer ? 'Цена строки за ед.' : 'Стоимость за ед.', align: 'right', cell: r => money(r.price)},
-            {label: 'Сумма', align: 'right', cell: r => money(Math.round(r.price * r.quantity / 1000))},
-            ...(showBookValue ? [{label: 'Учётная стоимость', align: 'right', cell: r => money(r.book_value)}] : []),
-            ...(at.data ? [{
-              label: 'После приёмки',
-              align: 'right',
-              cell: r => qty((at.data.rows.find(l => l.item_id === r.item_id)?.quantity || 0) + r.quantity) + ' компл.'
-            }] : [])
-          ]}
-        />
-        <div className="document-total">
-          <span>{sale ? 'К оплате' : showBookValue ? 'Всего по документу' : 'Всего'}</span>
-          <strong>{money(d.total)}</strong>
         </div>
-        {showBookValue && (
-          <p className="inline-note info">
-            Сумма по строкам документа ({money(d.total)}) рассчитана по цене отправки; на баланс регионального склада приходуется учётная стоимость списания в Иваново ({money(d.book_value)}).
-          </p>
-        )}
-        {sale && <Details values={details}/>}
-        {d.memo && <p className="inline-note">{sale ? <><strong>Комментарий:</strong> {d.memo}</> : d.memo}</p>}
-        {canReceive && (
-          <p className="inline-note info">Сверьте количество каждой позиции перед подтверждением приёмки.</p>
-        )}
-        <div className={'action-row' + (canReceive ? ' desktop-form-actions' : '')}>
-          <Button to={back} className="push-left">Назад</Button>
-          {sale && <Button onClick={() => window.print()}>Распечатать</Button>}
-          {canReceive && <Button kind="primary" onClick={() => setReceiveConfirm(true)}>Подтвердить получение</Button>}
-        </div>
-      </Card>
+      ) : (
+        <Card
+          className="print-document"
+          title={sale ? 'Документ о продаже' : transfer ? 'Товары отправки' : 'Товары поступления'}
+          actions={<Status value={d.status} label={sale ? 'Оформлена' : undefined}/>}
+        >
+          {receipt || !sale
+            ? <Details values={details}/>
+            : (
+              <div className="print-heading">
+                <h2>Документ о продаже {d.code}</h2>
+                <p>{d.source_name} · {d.source_city} · {dateTime(d.created_at)}</p>
+              </div>
+            )}
+          <Table
+            flush
+            rows={d.lines}
+            label={sale ? 'Товары продажи' : 'Товары документа'}
+            columns={lineColumns}
+          />
+          <div className="document-total">
+            <span>{sale ? 'К оплате' : showBookValue ? 'Всего по документу' : 'Всего'}</span>
+            <strong>{money(d.total)}</strong>
+          </div>
+          {showBookValue && (
+            <p className="inline-note info">{bookValueNote}</p>
+          )}
+          {sale && <Details values={details}/>}
+          {d.memo && <p className="inline-note">{sale ? <><strong>Комментарий:</strong> {d.memo}</> : d.memo}</p>}
+          {canReceive && (
+            <p className="inline-note info">Сверьте количество каждой позиции перед подтверждением приёмки.</p>
+          )}
+          {(sale || canReceive) && (
+            <div className={'action-row' + (canReceive && !sale ? ' desktop-form-actions' : '')}>
+              {sale && <Button onClick={() => window.print()}>Распечатать</Button>}
+              {canReceive && <Button kind="primary" onClick={() => setReceiveConfirm(true)}>Подтвердить получение</Button>}
+            </div>
+          )}
+        </Card>
+      )}
       <DocumentHistory document={d} hideCost={regional}/>
       {canReceive && (
         <div className="mobile-sticky-bar">
@@ -1660,11 +1777,11 @@ export function RawMaterial({id}) {
                 rows={[material]}
                 columns={[
                   {label: 'Материал', primary: true, cell: r => r.name},
-                  {label: 'Единица', cell: r => r.unit},
+                  {label: 'Единица', mobileHide: true, cell: r => r.unit},
                   {label: 'На начало дня', align: 'right', cell: r => qty(r.quantity - r.incoming + r.outgoing) + ' ' + r.unit},
                   {label: 'Поступило', align: 'right', cell: r => qty(r.incoming) + ' ' + r.unit},
                   {label: 'Списано', align: 'right', cell: r => qty(r.outgoing) + ' ' + r.unit},
-                  {label: 'Остаток', align: 'right', cell: r => <strong>{qty(r.quantity)} {r.unit}</strong>},
+                  {label: 'Остаток', align: 'right', mobileAccent: true, cell: r => <strong>{qty(r.quantity)} {r.unit}</strong>},
                   {label: 'Учётная стоимость', align: 'right', cell: r => money(r.value)}
                 ]}
               />
@@ -1672,9 +1789,6 @@ export function RawMaterial({id}) {
             <Section title="Движения материала">
               <StockHistory id={1} material={id}/>
             </Section>
-            <div className="left-actions">
-              <Button to="/stock/1">Назад на склад</Button>
-            </div>
           </Page>
         )
       }}

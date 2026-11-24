@@ -76,7 +76,7 @@ function formatSignedMoney(delta) {
   return `${sign}${money(Math.abs(delta))}`
 }
 
-function LocalPager({ rows, columns, page, setPage, label, empty, footer, rowKey, rowHref, flush = false, className = '' }) {
+function LocalPager({ rows, columns, page, setPage, label, empty, footer, mobileSummary, rowKey, rowHref, flush = false, className = '' }) {
   const [size, setSize] = useState(15)
   const maxPage = Math.max(1, Math.ceil(rows.length / size))
   const safePage = Math.min(page, maxPage)
@@ -88,6 +88,7 @@ function LocalPager({ rows, columns, page, setPage, label, empty, footer, rowKey
         label={label}
         empty={empty}
         footer={footer}
+        mobileSummary={mobileSummary}
         rowKey={rowKey}
         rowHref={rowHref}
         flush={flush}
@@ -180,6 +181,7 @@ export function Catalog() {
           { label: 'Артикул', cell: r => r.sku },
           {
             label: 'Спецификация',
+            mobileFull: true,
             cell: r => {
               const list = specsByProduct.get(r.id) || []
               const latest = list[0]
@@ -192,10 +194,11 @@ export function Catalog() {
               )
             }
           },
-          { label: 'Цена продажи', align: 'right', cell: r => money(r.price) },
+          { label: 'Цена продажи', align: 'right', mobileAccent: true, cell: r => money(r.price) },
           {
             label: 'Статус',
             align: 'after-number',
+            mobileHide: true,
             cell: () => <Status value="posted" label="Действует" />
           }
         ]}
@@ -393,99 +396,103 @@ function SpecEditor({ detail, close, done }) {
         </div>
       )}
 
-      <h3>Спецификация</h3>
-      <Field
-        label="Название спецификации"
-        wide
-        help="Если оставить пустым, присвоится «Спецификация №…»"
-      >
-        <input
-          maxLength="120"
-          placeholder={detail ? 'Например: Без полиэстера' : 'Например: Стандарт'}
-          value={specName}
-          onChange={e => setSpecName(e.target.value)}
-        />
-      </Field>
+      <div className={detail ? 'spec-form' : 'spec-form form-flat-section'}>
+        <h3>Спецификация</h3>
+        <Field
+          label="Название спецификации"
+          wide
+          help="Если оставить пустым, присвоится «Спецификация №…»"
+        >
+          <input
+            maxLength="120"
+            placeholder={detail ? 'Например: Без полиэстера' : 'Например: Стандарт'}
+            value={specName}
+            onChange={e => setSpecName(e.target.value)}
+          />
+        </Field>
 
-      {norms.length === 0 ? (
-        <p className="muted">
-          Материалы не указаны — списание сырья не выполняется. Можно добавить сколько угодно материалов на любой этап или сохранить спецификацию без сырья.
-        </p>
-      ) : (
-        <div className="spec-lines">
-          {norms.map(n => {
-            const unit = rawItems.find(i => i.id === n.item_id)?.unit
-            const fractional = isFractionalUnit(unit)
-            const availableEntries = rawItems
-              .filter(i => i.id === n.item_id || !norms.some(o => o.stage === n.stage && o.item_id === i.id))
-              .map(i => [i.id, i.name, false, [i.sku, i.unit].filter(Boolean).join(' · ')])
-            return (
-              <div className="spec-line" key={n.key}>
-                <Field label="Этап">
-                  <Select
-                    value={n.stage}
-                    entries={production}
-                    onChange={e => patch(n.key, { stage: e.target.value, item_id: '' })}
-                  />
-                </Field>
-                <Field label="Материал">
-                  <SearchPicker
-                    required
-                    value={n.item_id}
-                    placeholder="Выберите материал"
-                    entries={availableEntries}
-                    onChange={e => patch(n.key, { item_id: Number(e.target.value) })}
-                  />
-                </Field>
-                <Field label={'На комплект' + (unit ? ', ' + unit : '')}>
-                  <input
-                    required
-                    min={fractional ? '.001' : '1'}
-                    max="100000"
-                    step={fractional ? '.001' : '1'}
-                    type="number"
-                    inputMode={fractional ? 'decimal' : 'numeric'}
-                    value={n.quantity}
-                    onChange={e => patch(n.key, { quantity: e.target.value })}
-                  />
-                </Field>
-                <Button
-                  kind="quiet-danger"
-                  className="icon-only"
-                  aria-label="Убрать материал"
-                  onClick={() => setNorms(list => list.filter(o => o.key !== n.key))}
-                >
-                  ×
-                </Button>
-              </div>
-            )
-          })}
+        {norms.length === 0 ? (
+          <p className="muted">
+            Материалы не указаны — списание сырья не выполняется. Можно добавить сколько угодно материалов на любой этап или сохранить спецификацию без сырья.
+          </p>
+        ) : (
+          <div className="spec-lines">
+            {norms.map(n => {
+              const unit = rawItems.find(i => i.id === n.item_id)?.unit
+              const fractional = isFractionalUnit(unit)
+              const availableEntries = rawItems
+                .filter(i => i.id === n.item_id || !norms.some(o => o.stage === n.stage && o.item_id === i.id))
+                .map(i => [i.id, i.name, false, [i.sku, i.unit].filter(Boolean).join(' · ')])
+              return (
+                <div className="spec-line" key={n.key}>
+                  <Field label="Этап">
+                    <Select
+                      value={n.stage}
+                      entries={production}
+                      onChange={e => patch(n.key, { stage: e.target.value, item_id: '' })}
+                    />
+                  </Field>
+                  <Field label="Материал">
+                    <SearchPicker
+                      required
+                      value={n.item_id}
+                      placeholder="Выберите материал"
+                      entries={availableEntries}
+                      onChange={e => patch(n.key, { item_id: Number(e.target.value) })}
+                    />
+                  </Field>
+                  <Field label={'На комплект' + (unit ? ', ' + unit : '')}>
+                    <input
+                      required
+                      min={fractional ? '.001' : '1'}
+                      max="100000"
+                      step={fractional ? '.001' : '1'}
+                      type="number"
+                      inputMode={fractional ? 'decimal' : 'numeric'}
+                      value={n.quantity}
+                      onChange={e => patch(n.key, { quantity: e.target.value })}
+                    />
+                  </Field>
+                  <Button
+                    kind="quiet-danger"
+                    className="icon-only"
+                    aria-label="Убрать материал"
+                    onClick={() => setNorms(list => list.filter(o => o.key !== n.key))}
+                  >
+                    ×
+                  </Button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <div className="action-pair">
+          <Button kind="secondary" onClick={() => addNorm('cut')}>Добавить материал</Button>
+          <Button kind="secondary" onClick={() => setNewMaterialOpen(true)}>
+            Новый материал
+          </Button>
         </div>
-      )}
-
-      <div className="action-pair">
-        <Button onClick={() => addNorm('cut')}>Добавить материал</Button>
-        <Button kind="secondary" onClick={() => setNewMaterialOpen(true)}>
-          Новый материал
-        </Button>
       </div>
 
-      <h3>Сдельные расценки</h3>
-      <div className="toolbar">
-        {production.map(([s, label]) => (
-          <Field key={s} label={label + ', ₽ / компл.'}>
-            <input
-              required
-              type="number"
-              inputMode="decimal"
-              min="0"
-              max="20000000"
-              step=".01"
-              value={rates[s]}
-              onChange={edit(setRates, s)}
-            />
-          </Field>
-        ))}
+      <div className="spec-form form-flat-section">
+        <h3>Сдельные расценки</h3>
+        <div className="toolbar">
+          {production.map(([s, label]) => (
+            <Field key={s} label={label + ', ₽ / компл.'}>
+              <input
+                required
+                type="number"
+                inputMode="decimal"
+                min="0"
+                max="20000000"
+                step=".01"
+                value={rates[s]}
+                onChange={edit(setRates, s)}
+              />
+            </Field>
+          ))}
+        </div>
       </div>
       <ErrorBox error={state.error} />
       {!detail && (
@@ -572,9 +579,9 @@ function ProductView({ detail, selected, refresh }) {
   }, [compareTarget, v])
 
   const materialColumns = [
-    { label: 'Этап', cell: r => stages[r.stage] },
+    { label: 'Этап', mobileSubtitle: true, cell: r => stages[r.stage] },
     { label: 'Материал', primary: true, cell: r => <a href={href('/stock/1/items/' + r.item_id)}>{r.name}</a> },
-    { label: 'Количество', align: 'right', cell: r => <strong>{qty(r.quantity)}</strong> },
+    { label: 'Количество', align: 'right', mobileAccent: true, cell: r => <strong>{qty(r.quantity)}</strong> },
     { label: 'Единица', cell: r => r.unit },
     ...(compareTarget
       ? [
@@ -608,9 +615,9 @@ function ProductView({ detail, selected, refresh }) {
   const rateRows = production.map(([code, label]) => ({ id: code, label }))
   const rateColumns = [
     { label: 'Этап', primary: true, cell: r => r.label },
-    { label: 'Операция', cell: r => actionLabels[r.id] },
-    { label: 'Единица выработки', cell: () => 'компл.' },
-    { label: 'Расценка', align: 'right', cell: r => <strong>{money(v?.rates[r.id] || 0)}</strong> },
+    { label: 'Операция', mobileSubtitle: true, cell: r => actionLabels[r.id] },
+    { label: 'Единица выработки', mobileHide: true, cell: () => 'компл.' },
+    { label: 'Расценка', align: 'right', mobileAccent: true, cell: r => <strong>{money(v?.rates[r.id] || 0)}</strong> },
     ...(compareTarget
       ? [
           {
@@ -751,6 +758,33 @@ function ProductView({ detail, selected, refresh }) {
             label="Технологическая карта и расценки"
             rows={rateRows}
             columns={rateColumns}
+            mobileSummary={{
+              title: 'Сдельные начисления на полный цикл',
+              rows: [
+                { label: 'Итого за 1 компл.', value: money(totalRates), strong: true },
+                ...(compareTarget
+                  ? [
+                      { label: 'Было (' + specTitle(compareTarget) + ')', value: money(compareTotalRates), muted: true },
+                      {
+                        label: 'Разница',
+                        value: (
+                          <span
+                            className={
+                              totalRates - compareTotalRates > 0
+                                ? 'diff-up'
+                                : totalRates - compareTotalRates < 0
+                                  ? 'diff-down'
+                                  : 'muted'
+                            }
+                          >
+                            {formatSignedMoney(totalRates - compareTotalRates)}
+                          </span>
+                        )
+                      }
+                    ]
+                  : [])
+              ]
+            }}
             footer={
               <tr>
                 <th scope="row" colSpan={3}>
@@ -807,7 +841,7 @@ export function ProductDetail({ id, selected }) {
   if (!id) {
     return roleCanWrite(ws.user) ? (
       <Page title="Добавить изделие" subtitle="Карточка модели и первая спецификация">
-        <div className="surface-panel">
+        <div className="form-flat">
           <SpecEditor
             close={() => go('/catalog')}
             done={r => {
@@ -818,11 +852,8 @@ export function ProductDetail({ id, selected }) {
         </div>
       </Page>
     ) : (
-      <div className="surface-panel forbidden-card">
-        <ErrorBox error="Создание изделий доступно только администратору и бухгалтеру." />
-        <ActionRow>
-          <Button to="/catalog">Вернуться в каталог</Button>
-        </ActionRow>
+      <div className="minimal-state">
+        <p>Нет доступа к этому разделу</p>
       </div>
     )
   }
@@ -1131,7 +1162,7 @@ export function People() {
         rowHref={r => '/people/' + r.id}
         columns={[
           { label: 'Сотрудник', primary: true, cell: r => <a href={href('/people/' + r.id)}>{r.name}</a> },
-          { label: 'Должность', cell: r => r.position },
+          { label: 'Должность', mobileSubtitle: !canWrite, cell: r => r.position },
           { label: 'Участок', cell: r => stages[r.stage] || r.stage },
           ...(canWrite
             ? [
@@ -1150,6 +1181,7 @@ export function People() {
           { label: 'Дата приёма', align: canWrite ? 'after-number' : undefined, cell: r => dayText(r.hired_on) },
           {
             label: 'Статус',
+            mobileKind: 'status',
             cell: r => <Status value={r.active ? 'posted' : 'inactive'} label={r.active ? 'Работает' : 'Не работает'} />
           }
         ]}
@@ -1434,7 +1466,12 @@ export function StaffDetail({ id }) {
 
             {activeTab === 'wages' && works && (
               <>
-                <RegistryTools state={state} periodLabel total={d.rows.length + hourlyRows.length}>
+                <RegistryTools
+                  state={state}
+                  periodLabel
+                  periodPlacement="header"
+                  total={d.rows.length + hourlyRows.length}
+                >
                   <DateRange
                     filters={filters}
                     change={change}
@@ -1516,11 +1553,22 @@ export function StaffDetail({ id }) {
                           </a>
                         )
                       },
-                      { label: 'Изделие', cell: itemText },
+                      { label: 'Изделие', mobileSubtitle: true, cell: itemText },
                       { label: 'Количество', align: 'right', cell: r => qty(r.quantity) },
                       { label: 'Расценка', align: 'right', cell: r => money(r.rate) },
-                      { label: 'Начислено', align: 'right', cell: r => <strong>{money(r.amount)}</strong> }
+                      { label: 'Начислено', align: 'right', mobileAccent: true, cell: r => <strong>{money(r.amount)}</strong> }
                     ]}
+                    mobileSummary={
+                      d.rows.length > 0
+                        ? {
+                            title: 'Итого по сдельной выработке',
+                            rows: [
+                              { label: 'Выработка', value: qty(quantity) + ' компл.' },
+                              { label: 'Начислено', value: money(pieceAmount), strong: true }
+                            ]
+                          }
+                        : undefined
+                    }
                     footer={
                       d.rows.length > 0 ? (
                         <tr>
@@ -1557,11 +1605,18 @@ export function StaffDetail({ id }) {
                             </a>
                           )
                         },
-                        { label: 'Вид работы', cell: () => 'Грузчик' },
+                        { label: 'Вид работы', mobileSubtitle: true, cell: () => 'Грузчик' },
                         { label: 'Время', align: 'right', cell: r => duration(r.minutes) },
                         { label: 'Ставка', align: 'right', cell: r => money(r.hourly_rate) + ' / ч' },
-                        { label: 'Начислено', align: 'right', cell: r => <strong>{money(r.amount)}</strong> }
+                        { label: 'Начислено', align: 'right', mobileAccent: true, cell: r => <strong>{money(r.amount)}</strong> }
                       ]}
+                      mobileSummary={{
+                        title: 'Итого за работу грузчиком',
+                        rows: [
+                          { label: 'Время', value: duration(hourlyMinutes) },
+                          { label: 'Начислено', value: money(hourlyAmount), strong: true }
+                        ]
+                      }}
                       footer={
                         <tr>
                           <th scope="row" colSpan={2}>
@@ -1651,7 +1706,7 @@ export function Payroll() {
         </>
       )
     },
-    { label: 'Начисление', align: 'right', cell: r => money(r.accrual) },
+    { label: 'Начисление', align: 'right', mobileFull: true, cell: r => money(r.accrual) },
     {
       label: 'Проезд',
       align: 'right',
@@ -1675,6 +1730,7 @@ export function Payroll() {
     {
       label: 'Итого',
       align: 'right',
+      mobileAccent: true,
       cell: r => (
         <strong className={'payroll-net' + (r.net_total < 0 ? ' negative' : '')}>{money(r.net_total)}</strong>
       )
@@ -1682,6 +1738,7 @@ export function Payroll() {
     {
       label: 'Действия',
       kind: 'actions',
+      mobileKind: 'actions',
       align: 'right',
       cell: r => (
         <Button kind="ghost" size="small" onClick={() => setEditingRow(r)}>
@@ -1788,6 +1845,7 @@ export function Payroll() {
                 <RegistryTools
                   state={state}
                   periodLabel
+                  periodPlacement="header"
                   total={rows.length}
                   placeholder="Сотрудник или комментарий"
                 >
@@ -1815,6 +1873,61 @@ export function Payroll() {
                   rowHref={r => '/people/' + r.id}
                   className="payroll-table"
                   columns={columns}
+                  mobileSummary={
+                    rows.length > 0
+                      ? {
+                          title: 'Итого по ведомости (' + number(rows.length) + ' чел.)',
+                          rows: [
+                            { label: 'Начисление', value: money(totalAccrual) },
+                            {
+                              label: 'Проезд',
+                              value:
+                                totalTravel > 0 ? (
+                                  <span className="payroll-travel">{money(totalTravel)}</span>
+                                ) : (
+                                  money(0)
+                                )
+                            },
+                            {
+                              label: 'Долг',
+                              value:
+                                totalDebt > 0 ? (
+                                  <span className="payroll-deduction">−{money(totalDebt)}</span>
+                                ) : (
+                                  money(0)
+                                )
+                            },
+                            {
+                              label: 'Аванс',
+                              value:
+                                totalAdvance > 0 ? (
+                                  <span className="payroll-deduction">−{money(totalAdvance)}</span>
+                                ) : (
+                                  money(0)
+                                )
+                            },
+                            {
+                              label: 'НДФЛ',
+                              value:
+                                totalNdfl > 0 ? (
+                                  <span className="payroll-deduction">−{money(totalNdfl)}</span>
+                                ) : (
+                                  money(0)
+                                )
+                            },
+                            {
+                              label: 'Итого к выдаче',
+                              value: (
+                                <span className={'payroll-net' + (totalNet < 0 ? ' negative' : '')}>
+                                  {money(totalNet)}
+                                </span>
+                              ),
+                              strong: true
+                            }
+                          ]
+                        }
+                      : undefined
+                  }
                   footer={
                     rows.length > 0 ? (
                       <tr>
@@ -2040,9 +2153,20 @@ export function Month() {
                     ...['opening', 'incoming', 'outgoing', 'closing'].map((key, idx) => ({
                       label: ['На начало', 'Приход', 'Расход', 'На конец'][idx] + ', компл.',
                       align: 'right',
+                      mobileFull: key === 'opening',
+                      mobileAccent: key === 'closing',
                       cell: r => (key === 'closing' ? <strong>{qty(r[key])}</strong> : qty(r[key]))
                     }))
                   ]}
+                  mobileSummary={{
+                    title: 'Итого по складам изделий',
+                    rows: [
+                      { label: 'На начало', value: qty(totalOpening) + ' компл.' },
+                      { label: 'Приход', value: qty(totalIncoming) + ' компл.' },
+                      { label: 'Расход', value: qty(totalOutgoing) + ' компл.' },
+                      { label: 'На конец', value: qty(totalClosing) + ' компл.', strong: true }
+                    ]
+                  }}
                   footer={
                     <tr>
                       <th scope="row">Итого по складам изделий</th>
@@ -2161,11 +2285,13 @@ export function Month() {
                     { label: 'Статья затрат', primary: true, cell: r => r.label },
                     {
                       label: 'В расчёте',
+                      mobileSubtitle: true,
                       cell: r => (r.kind === 'deduction' ? 'Вычитается (остаток НЗП)' : 'Увеличивает себестоимость')
                     },
                     {
                       label: 'Сумма',
                       align: 'right',
+                      mobileAccent: true,
                       cell: r => (
                         <span className={r.kind === 'deduction' && r.value > 0 ? 'negative' : undefined}>
                           {r.kind === 'deduction' && r.value > 0 ? '−' : ''}
@@ -2174,6 +2300,9 @@ export function Month() {
                       )
                     }
                   ]}
+                  mobileSummary={{
+                    rows: [{ label: 'Себестоимость выпуска', value: money(d.total), strong: true }]
+                  }}
                   footer={
                     <tr>
                       <th scope="row" colSpan={2}>
@@ -2296,34 +2425,6 @@ export function Settings() {
                   ]}
                 />
 
-                {canWrite && (
-                  <form className="spec-form" onSubmit={handleRateSubmit}>
-                    <Field
-                      label="Фиксированная ставка грузчика, ₽ / час"
-                      help="Применяется в отчётах за смену при добавлении почасовой работы грузчиком"
-                    >
-                      <input
-                        required
-                        type="number"
-                        inputMode="decimal"
-                        min="0"
-                        max="20000000"
-                        step=".01"
-                        disabled={rateState.busy}
-                        value={loaderRate}
-                        onChange={e => setLoaderRate(e.target.value)}
-                      />
-                    </Field>
-                    <ErrorBox error={rateState.error} />
-                    <div className="left-actions">
-                      <Button type="submit" kind="primary" disabled={rateState.busy || rateUnchanged}>
-                        {rateState.busy ? 'Сохранение…' : 'Сохранить ставку'}
-                      </Button>
-                      <Button to="/catalog">Открыть изделия и нормы</Button>
-                    </div>
-                  </form>
-                )}
-
                 {!canWrite && (
                   <>
                     <p className="muted">
@@ -2335,6 +2436,34 @@ export function Settings() {
                   </>
                 )}
               </div>
+
+              {canWrite && (
+                <form className="form-flat" onSubmit={handleRateSubmit}>
+                  <Field
+                    label="Фиксированная ставка грузчика, ₽ / час"
+                    help="Применяется в отчётах за смену при добавлении почасовой работы грузчиком"
+                  >
+                    <input
+                      required
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      max="20000000"
+                      step=".01"
+                      disabled={rateState.busy}
+                      value={loaderRate}
+                      onChange={e => setLoaderRate(e.target.value)}
+                    />
+                  </Field>
+                  <ErrorBox error={rateState.error} />
+                  <div className="form-actions">
+                    <Button type="submit" kind="primary" disabled={rateState.busy || rateUnchanged}>
+                      {rateState.busy ? 'Сохранение…' : 'Сохранить ставку'}
+                    </Button>
+                    <Button to="/catalog">Открыть изделия и нормы</Button>
+                  </div>
+                </form>
+              )}
             </Section>
           )}
 
@@ -2375,7 +2504,7 @@ export function Settings() {
             title="Смена пароля"
             subtitle="После смены пароля все другие активные сеансы будут завершены"
           >
-            <div className="surface-panel">
+            <div className="form-flat">
               {saved && (
                 <div className="notice success" role="status">
                   Пароль успешно изменён.
