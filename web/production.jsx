@@ -2,19 +2,28 @@ import React, { useId, useState } from 'react'
 import {
   ActionRow, Button, Card, Confirm, DateControl, DateRange, Dialog, Download, EmptyState,
   ErrorBox, Field, FormActions, Guard, MetricStrip, Page, Pager, RegistryTools, Section, Select,
-  Status, Stepper, Table, Tabs, api, dayText, go, href, itemText, money, monthText, number, qty,
-  roleCanWrite, routeWith, shifts, stages, statuses, timeText, useAction, useFilters, useRemote,
-  useSearchOptions, useToast, useWorkspace
+  Status, Stepper, Table, Tabs, api, dayText, duration, go, href, itemText, money, monthText,
+  number, qty, roleCanWrite, routeWith, shifts, stages, statuses, timeText, useAction, useFilters,
+  useRemote, useSearchOptions, useToast, useWorkspace
 } from './ui'
 import { SearchPicker } from './pickers'
 
 const production = Object.entries(stages).slice(0, 3)
 const finishedLabels = { cut: 'Раскроено', sew: 'Пошито', pack: 'Упаковано' }
 const wipLabels = { cut: 'Крой', sew: 'Пошив', pack: 'Упаковка' }
+const hourlyWorkLabels = { loader: 'Грузчик' }
+const hourlyPresets = [
+  [30, '30 мин'],
+  [60, '1 ч'],
+  [90, '1,5 ч'],
+  [120, '2 ч'],
+  [180, '3 ч'],
+  [240, '4 ч']
+]
 const tabList = [
   ['work', 'Выработка'],
   ['materials', 'Материалы'],
-  ['wages', 'Технологическая карта · зарплата']
+  ['wages', 'Оплата смены']
 ]
 const events = {
   created: 'Создан',
@@ -38,6 +47,28 @@ const operations = {
 }
 const sum = (rows, key) => rows.reduce((total, row) => total + (row[key] || 0), 0)
 const warehouseLabel = (name, city) => [name, city].filter(Boolean).join(' · ')
+const calcHourlyAmount = (minutes, rate) => Math.round((Number(minutes || 0) * Number(rate || 0)) / 60)
+
+function defaultSpecForDate(itemSpecs, day) {
+  if (!itemSpecs?.length) return null
+  const ordered = [...itemSpecs].sort((a, b) => (b.version || 0) - (a.version || 0))
+  return ordered.find(s => !day || !s.effective || s.effective <= day) || ordered[0]
+}
+
+function specOptionLabel(spec) {
+  if (!spec) return 'Спецификация'
+  const raw = (spec.name || '').trim()
+  const base = raw || (spec.version ? 'Спецификация ' + spec.version : 'Спецификация')
+  const details = []
+  if (spec.version && base !== 'Спецификация ' + spec.version && base !== 'Версия ' + spec.version) {
+    details.push('версия ' + spec.version)
+  }
+  if (spec.effective) {
+    details.push('с ' + dayText(spec.effective))
+  }
+  return details.length ? base + ' (' + details.join(', ') + ')' : base
+}
+
 function shiftDay(iso, delta) {
   if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return ''
   const [y, m, d] = iso.split('-').map(Number)
@@ -64,7 +95,26 @@ function shiftReportColumns(overview = false) {
       label: 'Выработка',
       width: overview ? '18%' : '14%',
       align: 'right',
-      cell: r => qty(r.quantity) + ' компл.'
+      cell: r => {
+        const hasQty = (r.quantity || 0) > 0
+        const hasHourly = (r.hourly_minutes || 0) > 0
+        if (!hasQty && hasHourly) {
+          return (
+            <>
+              <span className="nowrap">{duration(r.hourly_minutes)}</span>
+              <span className="cell-secondary nowrap">Грузчик</span>
+            </>
+          )
+        }
+        return (
+          <>
+            <span className="nowrap">{qty(r.quantity) + ' компл.'}</span>
+            {hasHourly && (
+              <span className="cell-secondary nowrap">+{duration(r.hourly_minutes)} грузчик</span>
+            )}
+          </>
+        )
+      }
     },
     {
       label: 'Начислено',
@@ -101,15 +151,18 @@ function shiftReportColumns(overview = false) {
 
 function OutputChart({ data }) {
   const draftStages = data.draft_stages || []
+  const postedReports = data.reports || []
+  const draftReports = data.day_drafts || []
   const rows = production.map(([key]) => {
     const found = data.stages.find(row => row.stage === key)
     const draft = draftStages.find(row => row.stage === key)
     return [key, found?.quantity || 0, found?.documents || 0, draft?.quantity || 0, draft?.documents || 0]
   })
   const totalOutput = sum(data.stages, 'quantity')
-  const totalDocs = sum(data.stages, 'documents')
+  const totalDocs = Math.max(sum(data.stages, 'documents'), postedReports.length)
   const totalDraftOutput = sum(draftStages, 'quantity')
-  const totalDraftDocs = sum(draftStages, 'documents')
+  const totalDraftDocs = Math.max(sum(draftStages, 'documents'), draftReports.length)
+  const totalHourlyMinutes = sum(postedReports, 'hourly_minutes')
   const max = Math.max(1, ...rows.map(([, n]) => n))
 
   return (
@@ -120,9 +173,11 @@ function OutputChart({ data }) {
           <span>
             {totalOutput > 0
               ? 'Итого: ' + qty(totalOutput) + ' компл.'
-              : totalDraftOutput > 0
-                ? 'В черновиках: ' + qty(totalDraftOutput) + ' компл.'
-                : 'Выработка ещё не проведена'}
+              : totalHourlyMinutes > 0
+                ? 'Грузчик: ' + duration(totalHourlyMinutes)
+                : totalDraftOutput > 0
+                  ? 'В черновиках: ' + qty(totalDraftOutput) + ' компл.'
+                  : 'Выработка ещё не проведена'}
           </span>
         </div>
         {rows.map(([key, n, docs, draftN, draftDocs]) => (
@@ -168,7 +223,10 @@ function OutputChart({ data }) {
         <strong>{money(data.wages)}</strong>
         <small>
           {totalDocs > 0
-            ? 'Проведённых отчётов: ' + number(totalDocs) + (totalDraftDocs ? ' · черновиков: ' + number(totalDraftDocs) : '')
+            ? 'Проведённых отчётов: ' +
+              number(totalDocs) +
+              (totalHourlyMinutes > 0 ? ' · грузчик ' + duration(totalHourlyMinutes) : '') +
+              (totalDraftDocs ? ' · черновиков: ' + number(totalDraftDocs) : '')
             : totalDraftDocs > 0
               ? 'Черновиков за день: ' + number(totalDraftDocs) + ' (ещё не проведены)'
               : 'Проведённых отчётов пока нет'}
@@ -262,6 +320,12 @@ export function Overview() {
           const dayReports = data.day_reports ?? data.reports ?? []
           const dayDrafts = data.day_drafts ?? dayReports.filter(r => r.status === 'draft')
           const dayDraftQty = sum(dayDrafts, 'quantity')
+          const dayDraftHourly = sum(dayDrafts, 'hourly_minutes')
+          const draftParts = [
+            number(dayDrafts.length) + ' шт.',
+            dayDraftQty > 0 ? qty(dayDraftQty) + ' компл.' : '',
+            dayDraftHourly > 0 ? 'грузчик ' + duration(dayDraftHourly) : ''
+          ].filter(Boolean)
           return (
             <>
               <OutputChart data={data} />
@@ -269,7 +333,7 @@ export function Overview() {
                 <div className="notice warning version-banner">
                   <div>
                     <strong>
-                      За {dayText(day)} есть непроведённые черновики ({number(dayDrafts.length)} шт., {qty(dayDraftQty)} компл.).
+                      За {dayText(day)} есть непроведённые черновики ({draftParts.join(', ')}).
                     </strong>{' '}
                     В выработке и начислениях смены учитываются только проведённые отчёты.
                   </div>
@@ -338,7 +402,9 @@ export function Overview() {
                                 {stages[r.stage]} · {r.code}
                               </a>{' '}
                               <span className="muted">
-                                ({dayText(r.date)}{r.quantity ? ' · ' + qty(r.quantity) + ' компл.' : ''})
+                                ({dayText(r.date)}
+                                {r.quantity ? ' · ' + qty(r.quantity) + ' компл.' : ''}
+                                {r.hourly_minutes ? ' · грузчик ' + duration(r.hourly_minutes) : ''})
                               </span>
                             </li>
                           ))}
@@ -470,7 +536,8 @@ function initialData(document, today, minDate) {
       shift: 'day',
       source_id: 1,
       memo: '',
-      lines: []
+      lines: [],
+      hourly_works: []
     }
   }
   return {
@@ -481,16 +548,32 @@ function initialData(document, today, minDate) {
     memo: document.memo || '',
     lines: document.lines.map(l => ({
       item_id: l.item_id,
+      spec_id: l.spec_id || null,
       quantity: l.quantity / 1000,
       prepared: l.prepared / 1000,
       assignments: l.assignments.map(a => ({ staff_id: a.staff_id, quantity: a.quantity / 1000 }))
+    })),
+    hourly_works: (document.hourly_works || []).map(h => ({
+      staff_id: h.staff_id,
+      minutes: h.minutes,
+      work_type: h.work_type || 'loader'
     }))
   }
 }
 
-function EditWorkLine({ original, stage, used, items, close, save, remove }) {
+function EditWorkLine({ original, stage, reportDate, used, items, specs = [], close, save, remove }) {
   const formId = useId()
-  const [data, set] = useState(original || { item_id: '', quantity: 1, prepared: 0, assignments: [] })
+  const [data, set] = useState(() => {
+    if (original) {
+      const itemSpecs = specs.filter(s => s.product_id === original.item_id)
+      const fallback = defaultSpecForDate(itemSpecs, reportDate)
+      return {
+        ...original,
+        spec_id: original.spec_id || fallback?.id || null
+      }
+    }
+    return { item_id: '', spec_id: null, quantity: 1, prepared: 0, assignments: [] }
+  })
   const [error, setError] = useState('')
   const change = (k, v) => {
     setError('')
@@ -499,6 +582,24 @@ function EditWorkLine({ original, stage, used, items, close, save, remove }) {
   const productEntries = items
     .filter(i => i.kind === 'product' && !used.includes(i.id))
     .map(i => [i.id, itemText(i), false, [i.sku, i.category].filter(Boolean).join(' · ')])
+
+  const itemSpecs = data.item_id
+    ? specs
+        .filter(s => s.product_id === Number(data.item_id))
+        .sort((a, b) => (b.version || 0) - (a.version || 0))
+    : []
+  const activeSpecId =
+    data.spec_id && itemSpecs.some(s => s.id === Number(data.spec_id))
+      ? Number(data.spec_id)
+      : defaultSpecForDate(itemSpecs, reportDate)?.id || null
+
+  function selectProduct(nextId) {
+    const id = nextId ? Number(nextId) : ''
+    const nextSpecs = id ? specs.filter(s => s.product_id === id) : []
+    const def = defaultSpecForDate(nextSpecs, reportDate)
+    setError('')
+    set(d => ({ ...d, item_id: id, spec_id: def?.id || null }))
+  }
 
   function submit(e) {
     e.preventDefault()
@@ -520,7 +621,7 @@ function EditWorkLine({ original, stage, used, items, close, save, remove }) {
       setError('Сначала уменьшите выработку в технологической карте.')
       return
     }
-    save({ ...data, quantity, prepared })
+    save({ ...data, spec_id: activeSpecId, quantity, prepared })
   }
 
   return (
@@ -544,12 +645,29 @@ function EditWorkLine({ original, stage, used, items, close, save, remove }) {
           <Field label="Изделие" wide>
             <SearchPicker
               required
-              placeholder="Поиск по названию, размеру или артикулу"
+              placeholder="Название, размер или артикул"
               entries={productEntries}
               value={data.item_id}
-              onChange={e => change('item_id', e.target.value ? Number(e.target.value) : '')}
+              onChange={e => selectProduct(e.target.value)}
             />
           </Field>
+          {itemSpecs.length > 0 && (
+            <Field
+              label="Спецификация"
+              wide
+              help={
+                itemSpecs.length > 1
+                  ? 'По умолчанию выбрана действующая на дату отчёта. При необходимости выберите другую версию.'
+                  : 'Для этого изделия действует одна спецификация.'
+              }
+            >
+              <Select
+                value={activeSpecId ? String(activeSpecId) : ''}
+                entries={itemSpecs.map(s => [String(s.id), specOptionLabel(s)])}
+                onChange={e => change('spec_id', e.target.value ? Number(e.target.value) : null)}
+              />
+            </Field>
+          )}
           <Field label="Количество, компл.">
             <Stepper
               required
@@ -576,6 +694,155 @@ function EditWorkLine({ original, stage, used, items, close, save, remove }) {
             </Field>
           )}
         </div>
+        <ErrorBox error={error} />
+      </form>
+    </Dialog>
+  )
+}
+
+function EditHourlyWork({ original, workers, usedStaffIds, loaderRate, close, save, remove }) {
+  const formId = useId()
+  const [staffId, setStaffId] = useState(original?.staff_id || '')
+  const [hours, setHours] = useState(() => (original ? String(Math.floor(original.minutes / 60)) : '1'))
+  const [mins, setMins] = useState(() => (original ? String(original.minutes % 60) : '0'))
+  const [error, setError] = useState('')
+
+  const availableWorkers = workers.filter(
+    w => !usedStaffIds.includes(w.id) || (original && w.id === original.staff_id)
+  )
+  const hNum = hours === '' ? 0 : Number(hours)
+  const mNum = mins === '' ? 0 : Number(mins)
+  const validParts =
+    Number.isInteger(hNum) && hNum >= 0 && hNum <= 24 &&
+    Number.isInteger(mNum) && mNum >= 0 && mNum <= 59
+  const totalMinutes = validParts ? hNum * 60 + mNum : 0
+  const validTotal = validParts && totalMinutes >= 1 && totalMinutes <= 1440
+  const previewAmount = validTotal ? calcHourlyAmount(totalMinutes, loaderRate) : 0
+
+  function pickPreset(minutes) {
+    setError('')
+    setHours(String(Math.floor(minutes / 60)))
+    setMins(String(minutes % 60))
+  }
+
+  function submit(e) {
+    e.preventDefault()
+    if (!staffId) {
+      setError('Выберите сотрудника из списка.')
+      return
+    }
+    if (!validTotal) {
+      setError('Укажите время работы от 1 минуты до 24 часов (минуты — от 0 до 59).')
+      return
+    }
+    save({ staff_id: Number(staffId), minutes: totalMinutes, work_type: 'loader' })
+  }
+
+  return (
+    <Dialog
+      title={original ? 'Изменить работу грузчиком' : 'Работа грузчиком (почасовая)'}
+      close={close}
+      footer={
+        <>
+          {remove && (
+            <Button className="push-left" kind="quiet-danger" onClick={remove}>
+              Убрать запись
+            </Button>
+          )}
+          <Button onClick={close}>Отмена</Button>
+          <Button type="submit" form={formId} kind="primary" disabled={!availableWorkers.length}>
+            Сохранить
+          </Button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={submit}>
+        <div className="form-grid">
+          <Field
+            label="Сотрудник"
+            wide
+            help={
+              !availableWorkers.length
+                ? 'Все действующие сотрудники уже добавлены в почасовую работу этого отчёта.'
+                : 'Можно выбрать любого действующего сотрудника вне зависимости от основного этапа.'
+            }
+          >
+            <SearchPicker
+              required
+              disabled={!availableWorkers.length}
+              placeholder="Имя, должность или этап"
+              value={staffId}
+              entries={availableWorkers.map(w => [
+                w.id,
+                w.name,
+                false,
+                [w.position, stages[w.stage]].filter(Boolean).join(' · ')
+              ])}
+              onChange={e => {
+                setError('')
+                setStaffId(e.target.value ? Number(e.target.value) : '')
+              }}
+            />
+          </Field>
+
+          <Field label="Быстрый выбор времени" wide>
+            <div className="duration-presets" role="group" aria-label="Быстрый выбор длительности">
+              {hourlyPresets.map(([presetMin, label]) => (
+                <button
+                  key={presetMin}
+                  type="button"
+                  className={'preset-chip' + (validTotal && totalMinutes === presetMin ? ' is-active' : '')}
+                  aria-pressed={validTotal && totalMinutes === presetMin}
+                  onClick={() => pickPreset(presetMin)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </Field>
+
+          <div className="wide duration-inputs">
+            <Field label="Часы">
+              <input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={24}
+                step={1}
+                value={hours}
+                onChange={e => {
+                  setError('')
+                  setHours(e.target.value)
+                }}
+              />
+            </Field>
+            <Field label="Минуты">
+              <input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={59}
+                step={1}
+                value={mins}
+                onChange={e => {
+                  setError('')
+                  setMins(e.target.value)
+                }}
+              />
+            </Field>
+          </div>
+        </div>
+
+        <div className="hourly-summary">
+          <span>
+            Начисление
+            {validTotal
+              ? ' (' + duration(totalMinutes) + ' × ' + money(loaderRate) + '/ч)'
+              : ' (ставка ' + money(loaderRate) + '/ч)'}
+          </span>
+          <strong>{validTotal ? money(previewAmount) : '—'}</strong>
+        </div>
+
         <ErrorBox error={error} />
       </form>
     </Dialog>
@@ -890,8 +1157,11 @@ function ReportEditor({ document }) {
   const ws = useWorkspace()
   const toast = useToast()
   const minDate = ws.settings?.open_month ? ws.settings.open_month + '-01' : undefined
+  const loaderRate = Number(ws.settings?.loader_rate) || 6000
   const [report, set] = useState(() => initialData(document, ws.today, minDate))
-  const [tab, setTab] = useState('work')
+  const [tab, setTab] = useState(() =>
+    document && !document.lines?.length && document.hourly_works?.length ? 'wages' : 'work'
+  )
   const [quote, setQuote] = useState(() => ({
     key: JSON.stringify(initialData(document, ws.today, minDate)),
     document
@@ -918,6 +1188,13 @@ function ReportEditor({ document }) {
   const sourceWarehouses = (ws.warehouses || []).filter(
     w => ws.user?.role !== 'master' || w.kind !== 'regional'
   )
+  const allSpecs = ws.specs || []
+  const specsById = new Map(allSpecs.map(s => [s.id, s]))
+  const specsByProduct = new Map()
+  for (const s of allSpecs) {
+    if (!specsByProduct.has(s.product_id)) specsByProduct.set(s.product_id, [])
+    specsByProduct.get(s.product_id).push(s)
+  }
 
   const products = report.lines.map(l => ({
     ...l,
@@ -948,19 +1225,42 @@ function ReportEditor({ document }) {
       }
     })
   )
+  const hourlyRows = report.hourly_works.map(h => {
+    const saved = computed?.hourly_works?.find(
+      x => x.staff_id === h.staff_id && (x.work_type || 'loader') === (h.work_type || 'loader')
+    )
+    const worker = ws.staff.find(w => w.id === h.staff_id)
+    const rate = saved?.hourly_rate ?? loaderRate
+    const amount = saved?.amount ?? calcHourlyAmount(h.minutes, rate)
+    return {
+      ...h,
+      work_type: h.work_type || 'loader',
+      name: saved?.name || worker?.name || 'Сотрудник #' + h.staff_id,
+      position: saved?.position || worker?.position || '',
+      stage: saved?.stage || worker?.stage || '',
+      hourly_rate: rate,
+      amount
+    }
+  })
+
   const totalOutput = products.reduce((s, l) => s + l.quantity, 0)
   const totalUnassigned = products.reduce(
     (s, l) => s + Math.max(0, l.quantity - l.assignments.reduce((q, a) => q + a.quantity, 0)),
     0
   )
-  const canPost = products.length > 0 && products.every(l => l.assignments.reduce((s, a) => s + a.quantity, 0) === l.quantity)
-  const totalWages = assigned.reduce((s, r) => s + (r.rate || 0) * r.quantity, 0)
+  const hasContent = products.length > 0 || hourlyRows.length > 0
+  const canPost =
+    hasContent && products.every(l => l.assignments.reduce((s, a) => s + a.quantity, 0) === l.quantity)
+  const totalPieceWages = assigned.reduce((s, r) => s + (r.rate || 0) * r.quantity, 0)
+  const totalHourlyMinutes = hourlyRows.reduce((s, r) => s + (r.minutes || 0), 0)
+  const totalHourlyWages = hourlyRows.reduce((s, r) => s + (r.amount || 0), 0)
+  const totalAllWages = totalPieceWages + totalHourlyWages
 
   function change(next, runPreview = false) {
     set(next)
     action.clear()
     previewAction.clear()
-    if (runPreview && next.lines.length) {
+    if (runPreview && (next.lines.length || next.hourly_works.length)) {
       previewAction.run(() => calculate(next))
     }
   }
@@ -982,9 +1282,19 @@ function ReportEditor({ document }) {
     updateLine(a.line, { ...l, assignments }, !remove)
   }
 
+  function setHourlyWork(entry, remove = false) {
+    const origId = edit?.original?.staff_id
+    const nextHourly = report.hourly_works.filter(
+      x => x.staff_id !== origId && x.staff_id !== entry.staff_id
+    )
+    if (!remove) nextHourly.push(entry)
+    change({ ...report, hourly_works: nextHourly }, tab !== 'work')
+    setEdit(null)
+  }
+
   function selectTab(key) {
     setTab(key)
-    if (key !== 'work' && editable && report.lines.length && !preview) {
+    if (key !== 'work' && editable && hasContent && !preview) {
       previewAction.run(() => calculate(report))
     }
   }
@@ -1013,6 +1323,24 @@ function ReportEditor({ document }) {
   const documentMovement = document && document.status !== 'draft'
   const canCorrect = Boolean(document?.status === 'posted' && write && (!minDate || document.date >= minDate))
   const eligibleWorkers = ws.staff.filter(w => w.active && w.stage === report.stage && w.hired_on <= report.date)
+  const eligibleHourlyWorkers = ws.staff.filter(w => w.active && w.hired_on <= report.date)
+  const docHasQty = (document?.quantity || 0) > 0
+  const docHasHourly = (document?.hourly_minutes || 0) > 0
+
+  const postConfirmText =
+    report.lines.length > 0 && report.hourly_works.length > 0
+      ? 'Система спишет рассчитанные материалы со склада «' +
+        activeSourceLabel +
+        '», отразит выпуск на складе и начислит сдельную и почасовую зарплату.'
+      : report.lines.length > 0
+        ? 'Система спишет рассчитанные материалы со склада «' +
+          activeSourceLabel +
+          '», отразит выпуск на складе и начислит сдельную зарплату.'
+        : 'Система начислит почасовую оплату за работу грузчиком (' +
+          duration(totalHourlyMinutes) +
+          ', ' +
+          money(totalHourlyWages) +
+          '). Складских списаний в этом отчёте нет.'
 
   return (
     <Page
@@ -1022,7 +1350,7 @@ function ReportEditor({ document }) {
         ' · ' +
         (document ? dayText(report.date) : 'данные из журнала выработки') +
         (document ? ' · ' + (statuses[document.status] || document.status) : ' · Черновик') +
-        (!editable ? ' · Списание: ' + activeSourceLabel : '')
+        (!editable && docHasQty ? ' · Списание: ' + activeSourceLabel : '')
       }
       actions={
         documentMovement && (
@@ -1039,19 +1367,36 @@ function ReportEditor({ document }) {
               value: <Status value={document.status} />,
               meta: (shifts[document.shift] || document.shift) + ' смена'
             },
-            {
-              key: 'output',
-              label: 'Выработка',
-              value: qty(document.quantity) + ' компл.',
-              meta: stages[document.stage] + ' · ' + activeSourceLabel,
-              to: '/stock/' + activeSourceId,
-              ariaLabel: 'Открыть склад списания: ' + activeSourceLabel
-            },
+            !docHasQty && docHasHourly
+              ? {
+                  key: 'output',
+                  label: 'Почасовая работа',
+                  value: duration(document.hourly_minutes),
+                  meta: 'Грузчик · ' + stages[document.stage]
+                }
+              : {
+                  key: 'output',
+                  label: 'Выработка',
+                  value: qty(document.quantity) + ' компл.',
+                  meta:
+                    (docHasHourly ? '+' + duration(document.hourly_minutes) + ' грузчик' : stages[document.stage]) +
+                    ' · ' +
+                    activeSourceLabel,
+                  to: '/stock/' + activeSourceId,
+                  ariaLabel: 'Открыть склад списания: ' + activeSourceLabel
+                },
             {
               key: 'wages',
               label: 'Начислено',
               value: document.status === 'draft' ? '—' : money(document.wages),
-              meta: document.status === 'draft' ? 'Фиксируется при проведении' : 'Сдельная оплата'
+              meta:
+                document.status === 'draft'
+                  ? 'Фиксируется при проведении'
+                  : docHasQty && docHasHourly
+                    ? 'Сдельная + грузчик (' + duration(document.hourly_minutes) + ')'
+                    : docHasHourly
+                      ? 'Почасовая оплата (грузчик)'
+                      : 'Сдельная оплата'
             },
             {
               key: 'author',
@@ -1085,7 +1430,11 @@ function ReportEditor({ document }) {
                       return !worker || worker.hired_on <= nextDate
                     })
                   }))
-                  change({ ...report, date: nextDate, lines: nextLines }, tab !== 'work')
+                  const nextHourly = report.hourly_works.filter(h => {
+                    const worker = ws.staff.find(w => w.id === h.staff_id)
+                    return !worker || worker.hired_on <= nextDate
+                  })
+                  change({ ...report, date: nextDate, lines: nextLines, hourly_works: nextHourly }, tab !== 'work')
                 }}
               />
             </Field>
@@ -1141,13 +1490,17 @@ function ReportEditor({ document }) {
             label="Выработка"
             rows={products}
             rowKey={r => r.item_id}
-            empty="Добавьте хотя бы одно изделие из журнала выработки"
+            empty={
+              hourlyRows.length > 0
+                ? 'Выработка по изделиям не добавлена — в отчёте учтена работа грузчиком (' + duration(totalHourlyMinutes) + ')'
+                : 'Добавьте изделие из журнала выработки или укажите почасовую работу грузчиком'
+            }
             columns={[
-              { label: 'Изделие', width: '30%', primary: true, cell: r => r.item.name },
-              { label: 'Размер', width: '14%', cell: r => r.item.size || '—' },
+              { label: 'Изделие', width: '28%', primary: true, cell: r => r.item.name },
+              { label: 'Размер', width: '13%', cell: r => r.item.size || '—' },
               {
                 label: 'Количество, компл.',
-                width: '16%',
+                width: '15%',
                 align: 'right',
                 cell: r => number(r.quantity)
               },
@@ -1155,7 +1508,7 @@ function ReportEditor({ document }) {
                 ? [
                     {
                       label: 'Передано с пошива',
-                      width: '16%',
+                      width: '15%',
                       align: 'right',
                       cell: r => number(r.prepared) + ' компл.'
                     }
@@ -1163,18 +1516,30 @@ function ReportEditor({ document }) {
                 : []),
               {
                 label: 'Спецификация',
-                width: '18%',
+                width: '21%',
                 align: 'after-number',
                 cell: r => {
+                  const explicit = r.spec_id ? specsById.get(Number(r.spec_id)) : null
                   const saved = computed?.lines?.find(l => l.item_id === r.item_id)
-                  const v = saved?.version || r.item.version
+                  const fallback = defaultSpecForDate(specsByProduct.get(r.item_id) || [], report.date)
+                  const specId = explicit?.id || saved?.spec_id || fallback?.id || null
+                  const specVer = explicit?.version || saved?.version || fallback?.version || r.item.version
+                  const specName =
+                    explicit?.name ||
+                    saved?.spec_name ||
+                    fallback?.name ||
+                    (specVer ? 'Спецификация ' + specVer : 'Спецификация')
+                  const showVerSub = specVer && specName !== 'Спецификация ' + specVer && specName !== 'Версия ' + specVer
                   return (
-                    <a
-                      className="neutral-link"
-                      href={href('/catalog/' + r.item_id + (saved?.spec_id ? '/specs/' + saved.spec_id : ''))}
-                    >
-                      {v ? 'Версия ' + v : 'Спецификация'}
-                    </a>
+                    <>
+                      <a
+                        className="neutral-link"
+                        href={href('/catalog/' + r.item_id + (specId ? '/specs/' + specId : ''))}
+                      >
+                        {specName}
+                      </a>
+                      {showVerSub && <span className="spec-tag">Версия {specVer}</span>}
+                    </>
                   )
                 }
               },
@@ -1211,6 +1576,16 @@ function ReportEditor({ document }) {
           {editable && (
             <div className="left-actions">
               <Button onClick={() => setEdit({ kind: 'line', index: -1 })}>Добавить изделие</Button>
+              <Button
+                kind="ghost"
+                disabled={hourlyRows.length >= eligibleHourlyWorkers.length}
+                onClick={() => {
+                  selectTab('wages')
+                  setEdit({ kind: 'hourly' })
+                }}
+              >
+                Работа грузчиком
+              </Button>
             </div>
           )}
         </>
@@ -1219,7 +1594,7 @@ function ReportEditor({ document }) {
       {tab === 'materials' && (
         <>
           <ErrorBox error={previewAction.error} />
-          {computed ? (
+          {computed && computed.lines?.length > 0 ? (
             <MaterialRows
               document={computed}
               sourceId={activeSourceId}
@@ -1231,8 +1606,10 @@ function ReportEditor({ document }) {
                 title={previewAction.busy ? 'Расчёт материалов…' : 'Нет выработки для расчёта'}
                 description={
                   previewAction.busy
-                    ? 'Проверяем нормы по действующей спецификации и остатки на складе «' + activeSourceLabel + '».'
-                    : 'Добавьте изделия на вкладке «Выработка», чтобы увидеть потребность в сырье.'
+                    ? 'Проверяем нормы по выбранной спецификации и остатки на складе «' + activeSourceLabel + '».'
+                    : hourlyRows.length > 0
+                      ? 'Для почасовой работы грузчиком списание сырья со склада не требуется.'
+                      : 'Добавьте изделия на вкладке «Выработка», чтобы увидеть потребность в сырье.'
                 }
               />
             </div>
@@ -1243,124 +1620,222 @@ function ReportEditor({ document }) {
       {tab === 'wages' && (
         <>
           <ErrorBox error={previewAction.error} />
-          {editable && products.length > 0 && (
-            <div className="surface-panel">
-              <div className="assignment-progress" aria-label="Распределение выработки по изделиям">
-                {products.map((l, idx) => {
-                  const allocated = l.assignments.reduce((s, a) => s + a.quantity, 0)
-                  const remaining = l.quantity - allocated
-                  const pct = l.quantity > 0 ? Math.min(100, Math.round((allocated / l.quantity) * 100)) : 0
-                  const fillState = remaining === 0 ? 'is-complete' : remaining < 0 ? 'is-over' : 'is-warning'
-                  return (
-                    <div className="assignment-progress-row" key={l.item_id}>
-                      <div>
-                        <strong>{itemText(l.item)}</strong>
-                        <span className="cell-secondary">
-                          распределено {number(allocated)} из {number(l.quantity)} компл.
-                        </span>
-                      </div>
-                      <div className="progress-track" aria-hidden="true">
-                        <div className={'progress-fill ' + fillState} style={{ width: pct + '%' }} />
-                      </div>
-                      <div className="actions">
-                        {remaining === 0 ? (
-                          <span className="positive">Распределено полностью</span>
-                        ) : remaining > 0 ? (
-                          <>
-                            <span className="negative">Остаток: {number(remaining)} компл.</span>
-                            <Button
-                              size="small"
-                              disabled={!eligibleWorkers.length}
-                              onClick={() => setEdit({ kind: 'assignment', lineIndex: idx })}
-                            >
-                              Назначить остаток ({number(remaining)})
+          {(editable || products.length > 0) && (
+            <>
+              {editable && products.length > 0 && (
+                <div className="surface-panel">
+                  <div className="assignment-progress" aria-label="Распределение выработки по изделиям">
+                    {products.map((l, idx) => {
+                      const allocated = l.assignments.reduce((s, a) => s + a.quantity, 0)
+                      const remaining = l.quantity - allocated
+                      const pct = l.quantity > 0 ? Math.min(100, Math.round((allocated / l.quantity) * 100)) : 0
+                      const fillState = remaining === 0 ? 'is-complete' : remaining < 0 ? 'is-over' : 'is-warning'
+                      return (
+                        <div className="assignment-progress-row" key={l.item_id}>
+                          <div>
+                            <strong>{itemText(l.item)}</strong>
+                            <span className="cell-secondary">
+                              распределено {number(allocated)} из {number(l.quantity)} компл.
+                            </span>
+                          </div>
+                          <div className="progress-track" aria-hidden="true">
+                            <div className={'progress-fill ' + fillState} style={{ width: pct + '%' }} />
+                          </div>
+                          <div className="actions">
+                            {remaining === 0 ? (
+                              <span className="positive">Распределено полностью</span>
+                            ) : remaining > 0 ? (
+                              <>
+                                <span className="negative">Остаток: {number(remaining)} компл.</span>
+                                <Button
+                                  size="small"
+                                  disabled={!eligibleWorkers.length}
+                                  onClick={() => setEdit({ kind: 'assignment', lineIndex: idx })}
+                                >
+                                  Назначить остаток ({number(remaining)})
+                                </Button>
+                              </>
+                            ) : (
+                              <span className="negative">Превышение на {number(-remaining)} компл.</span>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <Table
+                label="Технологическая карта"
+                rows={assigned}
+                rowKey={r => r.line + '-' + r.staff_id}
+                rowHref={!editable ? r => '/people/' + r.staff_id : undefined}
+                empty={
+                  products.length
+                    ? 'Исполнители ещё не назначены'
+                    : 'Сначала добавьте изделия на вкладке «Выработка» (или укажите ниже работу грузчиком)'
+                }
+                columns={[
+                  {
+                    label: 'Исполнитель',
+                    primary: true,
+                    cell: r =>
+                      r.worker ? (
+                        <a href={href('/people/' + r.staff_id)}>{r.worker.name}</a>
+                      ) : (
+                        '—'
+                      )
+                  },
+                  { label: 'Изделие', cell: r => itemText(r.item) },
+                  { label: 'Комплектов', align: 'right', cell: r => number(r.quantity) },
+                  {
+                    label: 'Расценка',
+                    align: 'right',
+                    cell: r => (r.rate !== undefined ? money(r.rate) : '—')
+                  },
+                  {
+                    label: 'Начислено',
+                    align: 'right',
+                    cell: r => (r.rate !== undefined ? money(r.rate * r.quantity) : '—')
+                  },
+                  ...(editable
+                    ? [
+                        {
+                          label: 'Действия',
+                          align: 'right',
+                          cell: r => (
+                            <Button kind="ghost" onClick={() => setEdit({ kind: 'assignment', original: r })}>
+                              Изменить
                             </Button>
-                          </>
-                        ) : (
-                          <span className="negative">Превышение на {number(-remaining)} компл.</span>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
+                          )
+                        }
+                      ]
+                    : [])
+                ]}
+                footer={
+                  assigned.length > 0 ? (
+                    <tr>
+                      <th scope="row" colSpan={2}>Итого по технологической карте</th>
+                      <td className="right" data-label="Комплектов">
+                        <strong>{number(assigned.reduce((s, r) => s + r.quantity, 0))}</strong>
+                      </td>
+                      <td />
+                      <td className="right" data-label="Начислено"><strong>{money(totalPieceWages)}</strong></td>
+                      {editable && <td />}
+                    </tr>
+                  ) : null
+                }
+              />
+              {editable && (
+                <div className="report-totals">
+                  <Button
+                    disabled={!products.length || totalUnassigned === 0 || !eligibleWorkers.length}
+                    onClick={() => setEdit({ kind: 'assignment' })}
+                  >
+                    Назначить исполнителя
+                  </Button>
+                  {totalUnassigned > 0 && (
+                    <span className="muted">
+                      Нераспределённый остаток: <strong>{number(totalUnassigned)} компл.</strong>
+                    </span>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
-          <Table
-            label="Технологическая карта"
-            rows={assigned}
-            rowKey={r => r.line + '-' + r.staff_id}
-            rowHref={!editable ? r => '/people/' + r.staff_id : undefined}
-            empty={
-              products.length
-                ? 'Исполнители ещё не назначены'
-                : 'Сначала добавьте изделия на вкладке «Выработка»'
-            }
-            columns={[
-              {
-                label: 'Исполнитель',
-                primary: true,
-                cell: r =>
-                  r.worker ? (
-                    <a href={href('/people/' + r.staff_id)}>{r.worker.name}</a>
-                  ) : (
-                    '—'
-                  )
-              },
-              { label: 'Изделие', cell: r => itemText(r.item) },
-              { label: 'Комплектов', align: 'right', cell: r => number(r.quantity) },
-              {
-                label: 'Расценка',
-                align: 'right',
-                cell: r => (r.rate !== undefined ? money(r.rate) : '—')
-              },
-              {
-                label: 'Начислено',
-                align: 'right',
-                cell: r => (r.rate !== undefined ? money(r.rate * r.quantity) : '—')
-              },
-              ...(editable
-                ? [
-                    {
-                      label: 'Действия',
-                      align: 'right',
-                      cell: r => (
-                        <Button kind="ghost" onClick={() => setEdit({ kind: 'assignment', original: r })}>
-                          Изменить
-                        </Button>
-                      )
-                    }
-                  ]
-                : [])
-            ]}
-            footer={
-              assigned.length > 0 ? (
-                <tr>
-                  <th scope="row" colSpan={2}>Итого по технологической карте</th>
-                  <td className="right" data-label="Комплектов">
-                    <strong>{number(assigned.reduce((s, r) => s + r.quantity, 0))}</strong>
-                  </td>
-                  <td />
-                  <td className="right" data-label="Начислено"><strong>{money(totalWages)}</strong></td>
-                  {editable && <td />}
-                </tr>
-              ) : null
-            }
-          />
-          {editable && (
-            <div className="report-totals">
-              <Button
-                disabled={!products.length || totalUnassigned === 0 || !eligibleWorkers.length}
-                onClick={() => setEdit({ kind: 'assignment' })}
-              >
-                Назначить исполнителя
-              </Button>
-              {totalUnassigned > 0 && (
-                <span className="muted">
-                  Нераспределённый остаток: <strong>{number(totalUnassigned)} компл.</strong>
-                </span>
-              )}
+          {(editable || hourlyRows.length > 0) && (
+            <Section
+              title="Дополнительная работа · Грузчик"
+              subtitle={'Почасовая оплата по ставке ' + money(loaderRate) + '/ч · доступен любой действующий сотрудник'}
+              actions={
+                editable ? (
+                  <Button
+                    size="small"
+                    disabled={hourlyRows.length >= eligibleHourlyWorkers.length}
+                    onClick={() => setEdit({ kind: 'hourly' })}
+                  >
+                    Добавить работу грузчиком
+                  </Button>
+                ) : null
+              }
+            >
+              <Table
+                label="Почасовая работа грузчиком"
+                rows={hourlyRows}
+                rowKey={r => r.staff_id + '-' + r.work_type}
+                rowHref={!editable ? r => '/people/' + r.staff_id : undefined}
+                empty="Почасовая работа грузчиком в этой смене не указывалась"
+                columns={[
+                  {
+                    label: 'Сотрудник',
+                    primary: true,
+                    cell: r => (
+                      <>
+                        <a href={href('/people/' + r.staff_id)}>{r.name}</a>
+                        {(r.position || r.stage) && (
+                          <span className="cell-secondary">
+                            {[r.position, stages[r.stage]].filter(Boolean).join(' · ')}
+                          </span>
+                        )}
+                      </>
+                    )
+                  },
+                  { label: 'Вид работы', cell: r => hourlyWorkLabels[r.work_type] || 'Грузчик' },
+                  { label: 'Время', align: 'right', className: 'nowrap', cell: r => duration(r.minutes) },
+                  { label: 'Ставка', align: 'right', className: 'nowrap', cell: r => money(r.hourly_rate) + '/ч' },
+                  { label: 'Начислено', align: 'right', className: 'nowrap', cell: r => money(r.amount) },
+                  ...(editable
+                    ? [
+                        {
+                          label: 'Действия',
+                          align: 'right',
+                          cell: r => (
+                            <Button kind="ghost" onClick={() => setEdit({ kind: 'hourly', original: r })}>
+                              Изменить
+                            </Button>
+                          )
+                        }
+                      ]
+                    : [])
+                ]}
+                footer={
+                  hourlyRows.length > 0 ? (
+                    <tr>
+                      <th scope="row" colSpan={2}>Итого работа грузчиком</th>
+                      <td className="right nowrap" data-label="Время">
+                        <strong>{duration(totalHourlyMinutes)}</strong>
+                      </td>
+                      <td />
+                      <td className="right nowrap" data-label="Начислено">
+                        <strong>{money(totalHourlyWages)}</strong>
+                      </td>
+                      {editable && <td />}
+                    </tr>
+                  ) : null
+                }
+              />
+            </Section>
+          )}
+
+          {assigned.length > 0 && hourlyRows.length > 0 && (
+            <div className="surface-panel">
+              <strong>Итого начислений по смене</strong>
+              <div className="calc-summary">
+                <div className="calc-summary-row">
+                  <span>Сдельная оплата</span>
+                  <strong>{money(totalPieceWages)}</strong>
+                </div>
+                <div className="calc-summary-row">
+                  <span>Работа грузчиком ({duration(totalHourlyMinutes)})</span>
+                  <strong>{money(totalHourlyWages)}</strong>
+                </div>
+                <div className="calc-summary-total">
+                  <span>Всего по отчёту</span>
+                  <strong>{money(totalAllWages)}</strong>
+                </div>
+              </div>
             </div>
           )}
         </>
@@ -1390,12 +1865,12 @@ function ReportEditor({ document }) {
           <Button kind="ghost" className="push-left" to="/reports">
             Отмена
           </Button>
-          <Button disabled={!report.lines.length || action.busy || dateBelowOpenMonth} onClick={() => save(false)}>
+          <Button disabled={!hasContent || action.busy || dateBelowOpenMonth} onClick={() => save(false)}>
             Сохранить черновик
           </Button>
           <Button
             kind="primary"
-            disabled={!report.lines.length || action.busy || dateBelowOpenMonth}
+            disabled={!hasContent || action.busy || dateBelowOpenMonth}
             onClick={() => {
               if (canPost) {
                 setConfirm('post')
@@ -1427,19 +1902,25 @@ function ReportEditor({ document }) {
       {editable && (
         <div className="mobile-sticky-bar" role="region" aria-label="Действия отчёта">
           <div className="mobile-sticky-summary">
-            <span>Выработка</span>
-            <strong>{number(totalOutput)} компл.</strong>
+            <span>{totalOutput > 0 || !totalHourlyMinutes ? 'Выработка' : 'Грузчик'}</span>
+            <strong>
+              {totalOutput > 0
+                ? number(totalOutput) + ' компл.' + (totalHourlyMinutes > 0 ? ' · ' + duration(totalHourlyMinutes) : '')
+                : totalHourlyMinutes > 0
+                  ? duration(totalHourlyMinutes)
+                  : '0 компл.'}
+            </strong>
           </div>
           <div className="mobile-sticky-actions">
             <Button
-              disabled={!report.lines.length || action.busy || dateBelowOpenMonth}
+              disabled={!hasContent || action.busy || dateBelowOpenMonth}
               onClick={() => save(false)}
             >
               Черновик
             </Button>
             <Button
               kind="primary"
-              disabled={!report.lines.length || action.busy || dateBelowOpenMonth}
+              disabled={!hasContent || action.busy || dateBelowOpenMonth}
               onClick={() => {
                 if (canPost) {
                   setConfirm('post')
@@ -1459,7 +1940,9 @@ function ReportEditor({ document }) {
         <EditWorkLine
           original={report.lines[edit.index]}
           stage={report.stage}
+          reportDate={report.date}
           items={ws.items}
+          specs={allSpecs}
           used={report.lines.filter((_, i) => i !== edit.index).map(l => l.item_id)}
           close={() => setEdit(null)}
           save={l => updateLine(edit.index, l, tab !== 'work')}
@@ -1486,10 +1969,22 @@ function ReportEditor({ document }) {
         />
       )}
 
+      {edit?.kind === 'hourly' && (
+        <EditHourlyWork
+          original={edit.original}
+          workers={eligibleHourlyWorkers}
+          usedStaffIds={report.hourly_works.map(h => h.staff_id)}
+          loaderRate={loaderRate}
+          close={() => setEdit(null)}
+          save={entry => setHourlyWork(entry)}
+          remove={edit.original ? () => setHourlyWork(edit.original, true) : undefined}
+        />
+      )}
+
       {confirm === 'post' && (
         <Confirm
           title="Провести отчёт?"
-          text={'Система спишет рассчитанные материалы со склада «' + activeSourceLabel + '», отразит выпуск на складе и начислит сдельную зарплату.'}
+          text={postConfirmText}
           close={() => setConfirm('')}
           submit="Провести отчёт"
           action={async () => {
@@ -1588,6 +2083,15 @@ export function ReportMovements({ id }) {
             id: l.id + '-' + a.staff_id
           }))
         )
+        const pieceTotal = assignmentRows.reduce(
+          (s, r) => s + Math.round((r.quantity * r.rate) / 1000),
+          0
+        )
+        const hourlyRows = d.hourly_works || []
+        const hourlyMinutesTotal = hourlyRows.reduce((s, r) => s + (r.minutes || 0), 0)
+        const hourlyAmountTotal = hourlyRows.reduce((s, r) => s + (r.amount || 0), 0)
+        const hasMovementsOrLines = (d.movements?.length || 0) > 0 || (d.lines?.length || 0) > 0
+
         return (
           <Page
             title={'Движения отчёта ' + d.code}
@@ -1597,109 +2101,178 @@ export function ReportMovements({ id }) {
               dayText(d.date) +
               ' · ' +
               (statuses[d.status] || d.status) +
-              ' · Списание: ' +
-              sourceLabel
+              (hasMovementsOrLines ? ' · Списание: ' + sourceLabel : '')
             }
             actions={<Button to={'/reports/' + d.id}>К отчёту</Button>}
           >
             <DocumentRelationBanner document={d} />
-            <Section
-              title="Материалы и выпуск"
-              subtitle={
-                <>
-                  Склад списания сырья:{' '}
-                  <a href={href('/stock/' + sourceId)}>{sourceLabel}</a>
-                </>
-              }
-            >
-              <Table
-                label="Материалы и выпуск"
-                rows={d.movements}
-                empty="Движений по этому документу нет"
-                columns={[
-                  {
-                    label: 'Склад',
-                    cell: r => <a href={href('/stock/' + r.warehouse_id)}>{r.warehouse}</a>
-                  },
-                  {
-                    label: 'Позиция',
-                    primary: true,
-                    cell: r => {
-                      const item = ws.items?.find(i => i.id === r.item_id)
-                      if (r.warehouse_id === 1) {
-                        return <a href={href('/stock/1/items/' + r.item_id)}>{r.name}</a>
+            {hasMovementsOrLines ? (
+              <Section
+                title="Материалы и выпуск"
+                subtitle={
+                  <>
+                    Склад списания сырья:{' '}
+                    <a href={href('/stock/' + sourceId)}>{sourceLabel}</a>
+                  </>
+                }
+              >
+                <Table
+                  label="Материалы и выпуск"
+                  rows={d.movements}
+                  empty="Движений по этому документу нет"
+                  columns={[
+                    {
+                      label: 'Склад',
+                      cell: r => <a href={href('/stock/' + r.warehouse_id)}>{r.warehouse}</a>
+                    },
+                    {
+                      label: 'Позиция',
+                      primary: true,
+                      cell: r => {
+                        const item = ws.items?.find(i => i.id === r.item_id)
+                        if (r.warehouse_id === 1) {
+                          return <a href={href('/stock/1/items/' + r.item_id)}>{r.name}</a>
+                        }
+                        if (item?.kind === 'raw') {
+                          return <a href={href('/stock/' + r.warehouse_id)}>{r.name}</a>
+                        }
+                        return <a href={href('/catalog/' + r.item_id)}>{itemText(r)}</a>
                       }
-                      if (item?.kind === 'raw') {
-                        return <a href={href('/stock/' + r.warehouse_id)}>{r.name}</a>
-                      }
-                      return <a href={href('/catalog/' + r.item_id)}>{itemText(r)}</a>
+                    },
+                    {
+                      label: 'Приход',
+                      align: 'right',
+                      cell: r =>
+                        r.quantity > 0 ? (
+                          <span className="positive">+{qty(r.quantity) + ' ' + r.unit}</span>
+                        ) : (
+                          '—'
+                        )
+                    },
+                    {
+                      label: 'Расход',
+                      align: 'right',
+                      cell: r =>
+                        r.quantity < 0 ? (
+                          <span className="negative">−{qty(-r.quantity) + ' ' + r.unit}</span>
+                        ) : (
+                          '—'
+                        )
+                    },
+                    {
+                      label: 'Остаток',
+                      align: 'right',
+                      cell: r => qty(r.balance_after) + ' ' + r.unit
                     }
-                  },
-                  {
-                    label: 'Приход',
-                    align: 'right',
-                    cell: r =>
-                      r.quantity > 0 ? (
-                        <span className="positive">+{qty(r.quantity) + ' ' + r.unit}</span>
-                      ) : (
-                        '—'
-                      )
-                  },
-                  {
-                    label: 'Расход',
-                    align: 'right',
-                    cell: r =>
-                      r.quantity < 0 ? (
-                        <span className="negative">−{qty(-r.quantity) + ' ' + r.unit}</span>
-                      ) : (
-                        '—'
-                      )
-                  },
-                  {
-                    label: 'Остаток',
-                    align: 'right',
-                    cell: r => qty(r.balance_after) + ' ' + r.unit
+                  ]}
+                />
+                <p className="muted">Остаток указан сразу после проведения соответствующей операции.</p>
+              </Section>
+            ) : (
+              <div className="inline-note info">
+                В этом отчёте учтена только почасовая работа грузчиком — складских движений нет.
+              </div>
+            )}
+            {(assignmentRows.length > 0 || !hourlyRows.length) && (
+              <Section title="Сдельная зарплата">
+                <Table
+                  label="Сдельная зарплата по отчёту"
+                  rows={assignmentRows}
+                  rowHref={r => '/people/' + r.staff_id}
+                  empty="Начислений по отчёту нет"
+                  columns={[
+                    {
+                      label: 'Исполнитель',
+                      primary: true,
+                      cell: r => <a href={href('/people/' + r.staff_id)}>{r.name}</a>
+                    },
+                    { label: 'Изделие', cell: r => r.item_name },
+                    { label: 'Операция', cell: () => stages[d.stage] },
+                    { label: 'Комплектов', align: 'right', cell: r => qty(r.quantity) },
+                    { label: 'Расценка', align: 'right', cell: r => money(r.rate) },
+                    {
+                      label: 'Начислено',
+                      align: 'right',
+                      cell: r => money(Math.round((r.quantity * r.rate) / 1000))
+                    }
+                  ]}
+                  footer={
+                    assignmentRows.length > 0 ? (
+                      <tr>
+                        <th scope="row" colSpan={3}>Итого сдельная</th>
+                        <td className="right" data-label="Комплектов">
+                          <strong>{qty(assignmentRows.reduce((s, r) => s + r.quantity, 0))}</strong>
+                        </td>
+                        <td />
+                        <td className="right" data-label="Начислено"><strong>{money(pieceTotal)}</strong></td>
+                      </tr>
+                    ) : null
                   }
-                ]}
-              />
-              <p className="muted">Остаток указан сразу после проведения соответствующей операции.</p>
-            </Section>
-            <Section title="Сдельная зарплата">
-              <Table
-                label="Сдельная зарплата по отчёту"
-                rows={assignmentRows}
-                rowHref={r => '/people/' + r.staff_id}
-                empty="Начислений по отчёту нет"
-                columns={[
-                  {
-                    label: 'Исполнитель',
-                    primary: true,
-                    cell: r => <a href={href('/people/' + r.staff_id)}>{r.name}</a>
-                  },
-                  { label: 'Изделие', cell: r => r.item_name },
-                  { label: 'Операция', cell: () => stages[d.stage] },
-                  { label: 'Комплектов', align: 'right', cell: r => qty(r.quantity) },
-                  { label: 'Расценка', align: 'right', cell: r => money(r.rate) },
-                  {
-                    label: 'Начислено',
-                    align: 'right',
-                    cell: r => money(Math.round((r.quantity * r.rate) / 1000))
-                  }
-                ]}
-                footer={
-                  assignmentRows.length > 0 ? (
+                />
+              </Section>
+            )}
+            {hourlyRows.length > 0 && (
+              <Section title="Дополнительная работа · Грузчик (почасовая)">
+                <Table
+                  label="Почасовая работа грузчиком"
+                  rows={hourlyRows}
+                  rowKey={r => r.id || r.staff_id + '-' + r.work_type}
+                  rowHref={r => '/people/' + r.staff_id}
+                  empty="Почасовой работы нет"
+                  columns={[
+                    {
+                      label: 'Сотрудник',
+                      primary: true,
+                      cell: r => (
+                        <>
+                          <a href={href('/people/' + r.staff_id)}>{r.name}</a>
+                          {(r.position || r.stage) && (
+                            <span className="cell-secondary">
+                              {[r.position, stages[r.stage]].filter(Boolean).join(' · ')}
+                            </span>
+                          )}
+                        </>
+                      )
+                    },
+                    { label: 'Вид работы', cell: r => hourlyWorkLabels[r.work_type] || 'Грузчик' },
+                    { label: 'Время', align: 'right', className: 'nowrap', cell: r => duration(r.minutes) },
+                    { label: 'Ставка', align: 'right', className: 'nowrap', cell: r => money(r.hourly_rate) + '/ч' },
+                    { label: 'Начислено', align: 'right', className: 'nowrap', cell: r => money(r.amount) }
+                  ]}
+                  footer={
                     <tr>
-                      <th scope="row" colSpan={3}>Итого начислено</th>
-                      <td className="right" data-label="Комплектов">
-                        <strong>{qty(assignmentRows.reduce((s, r) => s + r.quantity, 0))}</strong>
+                      <th scope="row" colSpan={2}>Итого работа грузчиком</th>
+                      <td className="right nowrap" data-label="Время">
+                        <strong>{duration(hourlyMinutesTotal)}</strong>
                       </td>
                       <td />
-                      <td className="right" data-label="Начислено"><strong>{money(d.wages)}</strong></td>
+                      <td className="right nowrap" data-label="Начислено">
+                        <strong>{money(hourlyAmountTotal)}</strong>
+                      </td>
                     </tr>
-                  ) : null
-                }
-              />
-            </Section>
+                  }
+                />
+              </Section>
+            )}
+            {assignmentRows.length > 0 && hourlyRows.length > 0 && (
+              <div className="surface-panel">
+                <strong>Итого начислений по отчёту</strong>
+                <div className="calc-summary">
+                  <div className="calc-summary-row">
+                    <span>Сдельная оплата</span>
+                    <strong>{money(pieceTotal)}</strong>
+                  </div>
+                  <div className="calc-summary-row">
+                    <span>Работа грузчиком ({duration(hourlyMinutesTotal)})</span>
+                    <strong>{money(hourlyAmountTotal)}</strong>
+                  </div>
+                  <div className="calc-summary-total">
+                    <span>Всего по документу</span>
+                    <strong>{money(d.wages)}</strong>
+                  </div>
+                </div>
+              </div>
+            )}
             <DocumentHistory document={{ ...d, movements: [] }} defaultOpen />
           </Page>
         )

@@ -34,13 +34,25 @@ export const money = (x = 0) => {
   const v = Number(x ?? 0)
   if (!Number.isFinite(v)) return '—'
   const rounded = Math.round(v)
-  return (rounded % 100 === 0 ? rubWhole : rubFrac).format(rounded / 100)
+  const fmt = rounded % 100 === 0 ? rubWhole : rubFrac
+  return (rounded < 0 ? '−' : '') + fmt.format(Math.abs(rounded) / 100)
 }
 
 export const qty = (x = 0) => {
   const v = Number(x ?? 0)
   return number(Number.isFinite(v) ? v / 1000 : 0)
 }
+
+export const duration = (minutes = 0) => {
+  const m = Math.round(Number(minutes ?? 0))
+  if (!Number.isFinite(m) || m <= 0) return '—'
+  const h = Math.floor(m / 60)
+  const rem = m % 60
+  if (h && rem) return `${h} ч ${rem} мин`
+  if (h) return `${h} ч`
+  return `${rem} мин`
+}
+export const formatDuration = duration
 
 export const dayText = (s) => {
   if (!s) return '—'
@@ -701,11 +713,54 @@ export function Stepper({
   )
 }
 
-export function Field({ label, wide = false, className = '', children, help }) {
+export function Toggle({
+  checked = false,
+  onChange,
+  label,
+  help,
+  disabled = false,
+  id,
+  className = ''
+}) {
+  const autoId = useId()
+  const controlId = id || autoId
+  return (
+    <div className={'toggle-field' + (disabled ? ' is-disabled' : '') + (className ? ' ' + className : '')}>
+      <label className="toggle-control" htmlFor={controlId}>
+        <input
+          id={controlId}
+          type="checkbox"
+          role="switch"
+          className="toggle-input"
+          checked={Boolean(checked)}
+          disabled={disabled}
+          aria-describedby={help ? controlId + '-hint' : undefined}
+          onChange={e => onChange?.(e.target.checked)}
+        />
+        <span className="toggle-track" aria-hidden="true">
+          <span className="toggle-thumb" />
+        </span>
+        <span className="toggle-copy">
+          <span className="toggle-label">{label}</span>
+          {help && <small id={controlId + '-hint'} className="toggle-help">{help}</small>}
+        </span>
+      </label>
+    </div>
+  )
+}
+
+export function Field({ label, action, wide = false, className = '', children, help }) {
   const id = useId()
   return (
     <div className={'field' + (wide ? ' wide' : '') + (className ? ' ' + className : '')}>
-      <label htmlFor={id}>{label}</label>
+      {action ? (
+        <div className="field-label-row">
+          <label htmlFor={id}>{label}</label>
+          {action}
+        </div>
+      ) : (
+        <label htmlFor={id}>{label}</label>
+      )}
       {React.cloneElement(children, { id, 'aria-describedby': help ? id + '-hint' : undefined })}
       {help && <small id={id + '-hint'}>{help}</small>}
     </div>

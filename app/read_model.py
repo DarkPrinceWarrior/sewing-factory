@@ -15,7 +15,7 @@ BASE_DOC = """
            u.name author, d.supplier,d.reference,d.payment, sw.city source_city, sw.name source_name, tw.city target_city, tw.name target_name,
            d.source_doc, src.code source_code, rep.id replacement_id, rep.code replacement_code,
            COALESCE(l.quantity,0) quantity,COALESCE(l.total,0) total,COALESCE(l.cost,0) book_value,
-           COALESCE(wages.amount,0) wages
+           COALESCE(wages.amount,0)+COALESCE(hw.amount,0) wages,COALESCE(hw.minutes,0) hourly_minutes
       FROM documents d JOIN users u ON u.id=d.author_id
       LEFT JOIN warehouses sw ON sw.id=COALESCE(d.source_id, CASE WHEN d.kind='report' THEN 1 END)
       LEFT JOIN warehouses tw ON tw.id=d.target_id
@@ -25,6 +25,8 @@ BASE_DOC = """
                    FROM lines GROUP BY doc_id) l ON l.doc_id=d.id
       LEFT JOIN (SELECT l.doc_id,SUM((a.quantity*a.rate+500)/1000) amount
                    FROM lines l JOIN assignments a ON a.line_id=l.id GROUP BY l.doc_id) wages ON wages.doc_id=d.id
+      LEFT JOIN (SELECT doc_id,SUM(amount) amount,SUM(minutes) minutes
+                   FROM hourly_works GROUP BY doc_id) hw ON hw.doc_id=d.id
 """
 
 
@@ -108,7 +110,9 @@ def detail(db, user, doc_id):
                COALESCE((SELECT SUM(quantity) FROM lines WHERE doc_id=d.id),0) quantity,
                COALESCE((SELECT SUM((quantity*price+500)/1000) FROM lines WHERE doc_id=d.id),0) total,
                COALESCE((SELECT SUM(book_value) FROM lines WHERE doc_id=d.id),0) book_value,
-               COALESCE((SELECT SUM((a.quantity*a.rate+500)/1000) FROM lines l JOIN assignments a ON a.line_id=l.id WHERE l.doc_id=d.id),0) wages
+               COALESCE((SELECT SUM((a.quantity*a.rate+500)/1000) FROM lines l JOIN assignments a ON a.line_id=l.id WHERE l.doc_id=d.id),0)
+                 + COALESCE((SELECT SUM(amount) FROM hourly_works WHERE doc_id=d.id),0) wages,
+               COALESCE((SELECT SUM(minutes) FROM hourly_works WHERE doc_id=d.id),0) hourly_minutes
           FROM documents d JOIN users u ON u.id=d.author_id
           LEFT JOIN warehouses sw ON sw.id=COALESCE(d.source_id, CASE WHEN d.kind='report' THEN 1 END)
           LEFT JOIN warehouses tw ON tw.id=d.target_id
@@ -119,8 +123,10 @@ def detail(db, user, doc_id):
     if d["kind"] == "sale":
         d.pop("reference",None)
     d["lines"] = records(db, """
-        SELECT l.*,i.name,i.size,i.unit,i.sku,s.version FROM lines l JOIN items i ON i.id=l.item_id
-          LEFT JOIN specs s ON s.id=l.spec_id WHERE l.doc_id=? ORDER BY l.id""", (doc_id,))
+        SELECT l.*,i.name,i.size,i.unit,i.sku,s.version,
+               COALESCE(NULLIF(s.name,''), 'Спецификация ' || s.version) spec_name
+        FROM lines l JOIN items i ON i.id=l.item_id
+        LEFT JOIN specs s ON s.id=l.spec_id WHERE l.doc_id=? ORDER BY l.id""", (doc_id,))
     source_wh = d["source_id"] or 1
     for l in d["lines"]:
         l["assignments"] = records(db, """
@@ -129,6 +135,9 @@ def detail(db, user, doc_id):
             SELECT m.*,i.name,i.unit,COALESCE(b.quantity,0) available FROM material_snapshots m JOIN items i ON i.id=m.item_id
             LEFT JOIN balances b ON b.item_id=m.item_id AND b.warehouse_id=?
             WHERE m.line_id=? ORDER BY m.item_id""",(source_wh,l["id"]))
+    d["hourly_works"] = records(db, """
+        SELECT h.id,h.staff_id,h.work_type,h.minutes,h.hourly_rate,h.amount,p.name,p.position,p.stage
+        FROM hourly_works h JOIN staff p ON p.id=h.staff_id WHERE h.doc_id=? ORDER BY h.id""", (doc_id,))
     moves = """
         SELECT m.*,i.name,i.size,i.unit,w.name warehouse,w.city,
                (SELECT COALESCE(SUM(previous.quantity),0) FROM movements previous
@@ -235,6 +244,9 @@ def overview(db,user,day):
     wages=scalar(db,"""
         SELECT COALESCE(SUM((a.quantity*a.rate+500)/1000),0) FROM assignments a JOIN lines l ON a.line_id=l.id
         JOIN documents d ON d.id=l.doc_id WHERE d.kind='report' AND d.status='posted' AND d.date=?
+    """,(day,)) + scalar(db,"""
+        SELECT COALESCE(SUM(h.amount),0) FROM hourly_works h
+        JOIN documents d ON d.id=h.doc_id WHERE d.kind='report' AND d.status='posted' AND d.date=?
     """,(day,))
     day_reports=records(db, BASE_DOC + """
         WHERE d.kind='report' AND d.date=? AND d.status IN ('posted','draft')
@@ -259,21 +271,81 @@ def overview(db,user,day):
             "day_drafts":day_drafts,"day_reports":day_reports,"pending":pending,"wip":wip}
 
 
-def payroll(db,start,end,stage="",staff=0):
-    sql="""
-      SELECT p.id,p.name,p.stage,p.position,SUM(a.quantity) quantity,SUM((a.quantity*a.rate+500)/1000) amount,
-             COUNT(DISTINCT d.id) documents
-      FROM assignments a JOIN staff p ON p.id=a.staff_id JOIN lines l ON l.id=a.line_id
-      JOIN documents d ON d.id=l.doc_id WHERE d.status='posted' AND d.date BETWEEN ? AND ?
-    """
-    params=[start,end]
+def catalog_specs(db):
+    return records(db, """
+        SELECT id,product_id,version,COALESCE(NULLIF(name,''), 'Спецификация ' || version) name,effective
+        FROM specs ORDER BY product_id, version DESC
+    """)
+
+
+def payroll(db,start,end,stage="",staff=0,include_zero=False):
+    month=start[:7]
+    piece={r["staff_id"]: r for r in records(db,"""
+      SELECT a.staff_id,SUM(a.quantity) quantity,SUM((a.quantity*a.rate+500)/1000) amount
+      FROM assignments a JOIN lines l ON l.id=a.line_id JOIN documents d ON d.id=l.doc_id
+      WHERE d.status='posted' AND d.date BETWEEN ? AND ? GROUP BY a.staff_id
+    """,(start,end))}
+    hourly={r["staff_id"]: r for r in records(db,"""
+      SELECT h.staff_id,SUM(h.minutes) minutes,SUM(h.amount) amount
+      FROM hourly_works h JOIN documents d ON d.id=h.doc_id
+      WHERE d.status='posted' AND d.date BETWEEN ? AND ? GROUP BY h.staff_id
+    """,(start,end))}
+    docs_map={r["staff_id"]: r["documents"] for r in records(db,"""
+      SELECT staff_id,COUNT(DISTINCT doc_id) documents FROM (
+        SELECT a.staff_id,l.doc_id FROM assignments a JOIN lines l ON l.id=a.line_id
+        JOIN documents d ON d.id=l.doc_id WHERE d.status='posted' AND d.date BETWEEN ? AND ?
+        UNION
+        SELECT h.staff_id,h.doc_id FROM hourly_works h
+        JOIN documents d ON d.id=h.doc_id WHERE d.status='posted' AND d.date BETWEEN ? AND ?
+      ) GROUP BY staff_id
+    """,(start,end,start,end))}
+    adj_map={r["staff_id"]: r for r in records(db,"SELECT * FROM payroll_adjustments WHERE month=?",(month,))}
+    sql="SELECT id,name,stage,position,active,travel_eligible,travel_amount FROM staff WHERE 1=1"
+    params=[]
     if stage:
-        sql+=" AND p.stage=?"
+        sql+=" AND stage=?"
         params.append(stage)
     if staff:
-        sql+=" AND p.id=?"
+        sql+=" AND id=?"
         params.append(staff)
-    return records(db,sql+" GROUP BY p.id ORDER BY amount DESC,p.name",params)
+    rows=[]
+    for p in records(db,sql+" ORDER BY name",params):
+        sid=p["id"]
+        pr=piece.get(sid)
+        hr=hourly.get(sid)
+        adj=adj_map.get(sid)
+        piece_amount=pr["amount"] if pr else 0
+        quantity=pr["quantity"] if pr else 0
+        hourly_amount=hr["amount"] if hr else 0
+        hourly_minutes=hr["minutes"] if hr else 0
+        accrual=piece_amount+hourly_amount
+        travel_override=adj["travel"] if adj else None
+        if travel_override is not None:
+            travel=travel_override
+        elif p["travel_eligible"] and (p["active"] or accrual>0):
+            travel=p["travel_amount"]
+        else:
+            travel=0
+        debt=adj["debt"] if adj else 0
+        advance=adj["advance"] if adj else 0
+        ndfl=adj["ndfl"] if adj else 0
+        memo=adj["memo"] if adj else ""
+        net_total=accrual+travel-debt-advance-ndfl
+        if not include_zero and not staff and not any((accrual,travel,debt,advance,ndfl)):
+            continue
+        rows.append({
+            "id": sid, "name": p["name"], "stage": p["stage"], "position": p["position"],
+            "active": p["active"], "month": month, "quantity": quantity,
+            "piece_amount": piece_amount, "hourly_minutes": hourly_minutes, "hourly_amount": hourly_amount,
+            "accrual": accrual, "amount": accrual,
+            "travel_eligible": bool(p["travel_eligible"]),
+            "default_travel": p["travel_amount"] if p["travel_eligible"] else 0,
+            "travel_override": travel_override, "travel": travel,
+            "debt": debt, "advance": advance, "ndfl": ndfl, "net_total": net_total,
+            "memo": memo, "documents": docs_map.get(sid, 0),
+        })
+    rows.sort(key=lambda r: (-r["accrual"], -r["net_total"], r["name"]))
+    return rows
 
 
 def staff_history(db,staff_id,start,end):
@@ -281,6 +353,14 @@ def staff_history(db,staff_id,start,end):
         SELECT d.id,d.date,d.code,d.stage,d.shift,l.item_id,i.name,i.size,a.quantity,a.rate,(a.rate*a.quantity+500)/1000 amount
         FROM assignments a JOIN lines l ON l.id=a.line_id JOIN documents d ON d.id=l.doc_id JOIN items i ON i.id=l.item_id
         WHERE a.staff_id=? AND d.status='posted' AND d.date BETWEEN ? AND ? ORDER BY d.date DESC,d.id DESC
+        """,(staff_id,start,end))
+
+
+def staff_hourly_history(db,staff_id,start,end):
+    return records(db,"""
+        SELECT d.id,d.date,d.code,d.stage,d.shift,h.work_type,h.minutes,h.hourly_rate,h.amount
+        FROM hourly_works h JOIN documents d ON d.id=h.doc_id
+        WHERE h.staff_id=? AND d.status='posted' AND d.date BETWEEN ? AND ? ORDER BY d.date DESC,d.id DESC
         """,(staff_id,start,end))
 
 

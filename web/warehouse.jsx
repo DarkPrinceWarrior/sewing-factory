@@ -1109,7 +1109,7 @@ function TransactionLines({lines, setLines, items, mode, onAddMaterial}) {
                 step=".01"
                 min=".01"
                 max="20000000"
-                placeholder={sale ? 'Цена, ₽' : '0.00'}
+                placeholder="Цена, ₽"
                 value={l.price}
                 onChange={e => setLine(l.key, {price: e.target.value})}
               />

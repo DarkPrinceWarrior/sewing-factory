@@ -1,3 +1,4 @@
+from calendar import monthrange
 from contextlib import asynccontextmanager, closing
 from datetime import date
 from io import BytesIO
@@ -14,11 +15,11 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Border, Font, PatternFill, Side
 from starlette.datastructures import MutableHeaders
 
 from . import operations as ops, read_model as read, schemas as model
-from .db import ROOT, SCHEMA, connect, now, password_hash, password_matches, record, records, matches_search, to_units, today, transaction
+from .db import ROOT, SCHEMA, connect, migrate, now, password_hash, password_matches, record, records, matches_search, to_units, today, transaction
 from .seed import seed
 
 
@@ -28,6 +29,7 @@ async def lifespan(_app):
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(SCHEMA)
         with transaction(db):
+            migrate(db)
             seed(db)
     yield
 
@@ -193,9 +195,19 @@ def workspace(db: DB, user: User):
           FROM documents d JOIN lines l ON l.doc_id=d.id WHERE d.kind='transfer' AND d.status='in_transit'
         """)
     info.update({"items":records(db,"""SELECT i.*,(SELECT MAX(version) FROM specs s WHERE s.product_id=i.id) version
-             FROM items i ORDER BY i.id"""),"staff":records(db,"SELECT * FROM staff ORDER BY name"),
+             FROM items i ORDER BY i.id"""),"specs":read.catalog_specs(db),
+                 "staff":records(db,"SELECT * FROM staff ORDER BY name"),
                  "settings":dict(db.execute("SELECT key,value FROM settings WHERE key!='seeded'").fetchall())})
     return info
+
+
+@app.put("/api/settings")
+def update_settings(data: model.SettingsUpdate, db: DB, user: User):
+    allow(user,"admin","accountant")
+    with transaction(db):
+        if data.loader_rate is not None:
+            db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('loader_rate',?)",(str(to_units(data.loader_rate,100)),))
+    return dict(db.execute("SELECT key,value FROM settings WHERE key!='seeded'").fetchall())
 
 
 @app.get("/api/overview")
@@ -463,13 +475,27 @@ def sales_summary(db:DB,user:User,start:Date=None,end:Date=None,warehouse:int=0,
     return read.sales_summary(db,user,str(start or ""),str(end or ""),warehouse,search)
 
 
+@app.get("/api/catalog")
+def list_catalog(db:DB,user:User):
+    allow(user,"admin","accountant","master")
+    specs=read.catalog_specs(db)
+    by_product={}
+    for s in specs:
+        by_product.setdefault(s["product_id"],[]).append(s)
+    items=records(db,"""SELECT i.*,(SELECT MAX(version) FROM specs s WHERE s.product_id=i.id) version
+        FROM items i WHERE i.kind='product' ORDER BY i.id""")
+    for item in items:
+        item["specs"]=by_product.get(item["id"],[])
+    return {"items":items,"specs":specs}
+
+
 @app.get("/api/catalog/{item_id}")
 def product(item_id:int,db:DB,user:User):
     allow(user,"admin","accountant","master")
     item=ops.required(db,"items",item_id)
     if item["kind"]!="product":
         raise HTTPException(404,"Изделие не найдено")
-    versions=records(db,"SELECT * FROM specs WHERE product_id=? ORDER BY version DESC",(item_id,))
+    versions=records(db,"SELECT id,product_id,version,effective,COALESCE(NULLIF(name,''), 'Спецификация ' || version) name FROM specs WHERE product_id=? ORDER BY version DESC",(item_id,))
     for v in versions:
         v["norms"]=records(db,"SELECT n.*,i.name,i.sku,i.unit FROM norms n JOIN items i ON i.id=n.item_id WHERE n.spec_id=? ORDER BY stage,i.id",(v["id"],))
         v["rates"]=dict(db.execute("SELECT stage,amount FROM rates WHERE spec_id=?",(v["id"],)).fetchall())
@@ -496,13 +522,20 @@ def add_version(item_id:int,data:model.Recipe,db:DB,user:User):
     return {"id":recipe}
 
 
+@app.get("/api/staff")
+def list_staff(db:DB,user:User):
+    allow(user,"admin","accountant","master")
+    return records(db,"SELECT * FROM staff ORDER BY name")
+
+
 @app.post("/api/staff")
 def add_staff(data:model.Staff,db:DB,user:User):
     allow(user,"admin","accountant")
     with transaction(db):
         ops.past_day(data.hired_on)
-        i=db.execute("INSERT INTO staff(name,stage,position,hired_on,active) VALUES(?,?,?,?,?)",
-            (data.name.strip(),data.stage,data.position.strip(),str(data.hired_on),data.active)).lastrowid
+        travel_amount=to_units(data.travel_amount,100)
+        i=db.execute("INSERT INTO staff(name,stage,position,hired_on,active,travel_eligible,travel_amount) VALUES(?,?,?,?,?,?,?)",
+            (data.name.strip(),data.stage,data.position.strip(),str(data.hired_on),data.active,1 if data.travel_eligible else 0,travel_amount)).lastrowid
     return {"id":i}
 
 
@@ -513,8 +546,9 @@ def update_staff(staff_id:int,data:model.Staff,db:DB,user:User):
         ops.required(db,"staff",staff_id)
         ops.past_day(data.hired_on)
         name=data.name.strip()
-        db.execute("UPDATE staff SET name=?,stage=?,position=?,hired_on=?,active=? WHERE id=?",
-            (name,data.stage,data.position.strip(),str(data.hired_on),data.active,staff_id))
+        travel_amount=to_units(data.travel_amount,100)
+        db.execute("UPDATE staff SET name=?,stage=?,position=?,hired_on=?,active=?,travel_eligible=?,travel_amount=? WHERE id=?",
+            (name,data.stage,data.position.strip(),str(data.hired_on),data.active,1 if data.travel_eligible else 0,travel_amount,staff_id))
         db.execute("UPDATE users SET name=? WHERE staff_id=?",(name,staff_id))
         if not data.active:
             db.execute("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE staff_id=?)",(staff_id,))
@@ -532,12 +566,20 @@ def staff(staff_id:int,db:DB,user:User,start:Date=None,end:Date=None,xlsx:bool=F
     if user["role"]=="master":
         if xlsx:
             allow(user,"admin","accountant")
-        return {"staff":p,"rows":[]}
-    hist=read.staff_history(db,staff_id,str(start or current[:7]+"-01"),str(end or current))
+        return {"staff":p,"rows":[],"hourly_rows":[],"summary":None}
+    s=str(start or current[:7]+"-01")
+    e=str(end or current)
+    hist=read.staff_history(db,staff_id,s,e)
+    hourly=read.staff_hourly_history(db,staff_id,s,e)
+    summary_rows=read.payroll(db,s,e,staff=staff_id,include_zero=True)
+    summary=summary_rows[0] if summary_rows else None
     if xlsx:
-        return export_xlsx("Начисления сотрудника",["Дата","Документ","Изделие","Размер","Количество","Расценка, ₽","Начислено, ₽"],
-            [[r["date"],r["code"],r["name"],r["size"],r["quantity"]/1000,r["rate"]/100,r["amount"]/100] for r in hist])
-    return {"staff":p,"rows":hist}
+        excel_rows=[[r["date"],r["code"],r["name"],r["size"],r["quantity"]/1000,r["rate"]/100,r["amount"]/100] for r in hist]
+        for h in hourly:
+            excel_rows.append([h["date"],h["code"],"Грузчик (почасовая)",f"{h['minutes']} мин",round(h["minutes"]/60,2),h["hourly_rate"]/100,h["amount"]/100])
+        excel_rows.sort(key=lambda row: (row[0], row[1]), reverse=True)
+        return export_xlsx("Начисления сотрудника",["Дата","Документ","Изделие / работа","Размер / время","Количество","Расценка, ₽","Начислено, ₽"],excel_rows)
+    return {"staff":p,"rows":hist,"hourly_rows":hourly,"summary":summary}
 
 
 @app.get("/api/payroll")
@@ -545,13 +587,63 @@ def payroll(db:DB,user:User,start:Date=None,end:Date=None,stage:str="",
             search:Annotated[str,Query(max_length=100)]="",xlsx:bool=False):
     allow(user,"admin","accountant")
     current=today()
-    data=read.payroll(db,str(start or current[:7]+"-01"),str(end or current),stage)
+    s=str(start or current[:7]+"-01")
+    e=str(end or current)
+    data=read.payroll(db,s,e,stage)
     if search:
         data=[r for r in data if matches_search(search,r["name"],r["position"])]
     if xlsx:
-        return export_xlsx("Сдельная зарплата",["Сотрудник","Этап","Комплектов","Начислено, ₽","Отчётов"],
-            [[r["name"],read.STAGE_NAME[r["stage"]],r["quantity"]/1000,r["amount"]/100,r["documents"]] for r in data])
+        headers=["Сотрудник","Начисление, ₽","Проезд, ₽","Долг, ₽","Аванс, ₽","НДФЛ, ₽","Итого, ₽"]
+        rows=[[r["name"],r["accrual"]/100,r["travel"]/100,r["debt"]/100,r["advance"]/100,r["ndfl"]/100,r["net_total"]/100] for r in data]
+        book=workbook_sheet("Ведомость",headers,rows)
+        ws=book.active
+        totals=[
+            "Итого",
+            sum(r["accrual"] for r in data)/100,
+            sum(r["travel"] for r in data)/100,
+            sum(r["debt"] for r in data)/100,
+            sum(r["advance"] for r in data)/100,
+            sum(r["ndfl"] for r in data)/100,
+            sum(r["net_total"] for r in data)/100,
+        ]
+        ws.append(totals)
+        total_row=ws.max_row
+        top_border=Border(top=Side(style="thin",color="6F38E9"))
+        for row_idx in range(2, total_row+1):
+            for col_idx in range(2, 8):
+                ws.cell(row=row_idx,column=col_idx).number_format="#,##0.00"
+        for cell in ws[total_row]:
+            cell.font=Font(bold=True)
+            cell.fill=PatternFill("solid",fgColor="F3EEFF")
+            cell.border=top_border
+        ws.auto_filter.ref=f"A1:G{max(1,total_row-1)}"
+        for col in ws.columns:
+            letter=col[0].column_letter
+            longest=max(len(f"{c.value:,.2f}") if isinstance(c.value,(int,float)) else len(str(c.value or "")) for c in col)
+            ws.column_dimensions[letter].width=min(38,max(16,longest+4))
+        return send_book(book,f"Ведомость зарплаты — {s[:7]}")
     return data
+
+
+@app.put("/api/payroll/adjustments")
+def save_payroll_adjustment(data:model.PayrollAdjustment,db:DB,user:User):
+    allow(user,"admin","accountant")
+    with transaction(db):
+        ops.required(db,"staff",data.staff_id)
+        travel=to_units(data.travel,100) if data.travel is not None else None
+        debt=to_units(data.debt,100)
+        advance=to_units(data.advance,100)
+        ndfl=to_units(data.ndfl,100)
+        db.execute("""
+            INSERT INTO payroll_adjustments(month,staff_id,travel,debt,advance,ndfl,memo,updated_at,updated_by)
+            VALUES(?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(month,staff_id) DO UPDATE SET
+              travel=excluded.travel,debt=excluded.debt,advance=excluded.advance,ndfl=excluded.ndfl,
+              memo=excluded.memo,updated_at=excluded.updated_at,updated_by=excluded.updated_by
+        """,(data.month,data.staff_id,travel,debt,advance,ndfl,data.memo,now(),user["id"]))
+    y,m=map(int,data.month.split("-"))
+    rows=read.payroll(db,f"{data.month}-01",f"{data.month}-{monthrange(y,m)[1]:02d}",staff=data.staff_id,include_zero=True)
+    return rows[0]
 
 
 @app.get("/api/month")

@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS items (
 );
 CREATE TABLE IF NOT EXISTS staff (
     id INTEGER PRIMARY KEY, name TEXT NOT NULL, stage TEXT NOT NULL, position TEXT NOT NULL,
-    hired_on TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1
+    hired_on TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+    travel_eligible INTEGER NOT NULL DEFAULT 0, travel_amount INTEGER NOT NULL DEFAULT 0 CHECK(travel_amount >= 0)
 );
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password TEXT NOT NULL,
@@ -44,7 +45,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE TABLE IF NOT EXISTS specs (
     id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES items(id),
-    version INTEGER NOT NULL, effective TEXT NOT NULL, UNIQUE(product_id, version)
+    version INTEGER NOT NULL, effective TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+    UNIQUE(product_id, version)
 );
 CREATE TABLE IF NOT EXISTS norms (
     spec_id INTEGER NOT NULL REFERENCES specs(id), item_id INTEGER NOT NULL REFERENCES items(id),
@@ -96,11 +98,41 @@ CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY, doc_id INTEGER NOT NULL REFERENCES documents(id), actor_id INTEGER NOT NULL REFERENCES users(id),
     happened_at TEXT NOT NULL, action TEXT NOT NULL, memo TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS hourly_works (
+    id INTEGER PRIMARY KEY, doc_id INTEGER NOT NULL REFERENCES documents(id),
+    staff_id INTEGER NOT NULL REFERENCES staff(id), work_type TEXT NOT NULL DEFAULT 'loader',
+    minutes INTEGER NOT NULL CHECK(minutes > 0), hourly_rate INTEGER NOT NULL CHECK(hourly_rate >= 0),
+    amount INTEGER NOT NULL CHECK(amount >= 0), UNIQUE(doc_id, staff_id, work_type)
+);
+CREATE INDEX IF NOT EXISTS hourly_works_doc ON hourly_works(doc_id);
+CREATE TABLE IF NOT EXISTS payroll_adjustments (
+    id INTEGER PRIMARY KEY, month TEXT NOT NULL, staff_id INTEGER NOT NULL REFERENCES staff(id),
+    travel INTEGER CHECK(travel IS NULL OR travel >= 0),
+    debt INTEGER NOT NULL DEFAULT 0 CHECK(debt >= 0),
+    advance INTEGER NOT NULL DEFAULT 0 CHECK(advance >= 0),
+    ndfl INTEGER NOT NULL DEFAULT 0 CHECK(ndfl >= 0),
+    memo TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
+    updated_by INTEGER REFERENCES users(id), UNIQUE(month, staff_id)
+);
 CREATE TABLE IF NOT EXISTS overhead (
     month TEXT PRIMARY KEY, amount INTEGER NOT NULL CHECK(amount >= 0), details TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
+
+
+def migrate(db):
+    """Idempotent schema migration for existing SQLite databases."""
+    staff_cols = {row["name"] for row in db.execute("PRAGMA table_info(staff)")}
+    if "travel_eligible" not in staff_cols:
+        db.execute("ALTER TABLE staff ADD COLUMN travel_eligible INTEGER NOT NULL DEFAULT 0")
+    if "travel_amount" not in staff_cols:
+        db.execute("ALTER TABLE staff ADD COLUMN travel_amount INTEGER NOT NULL DEFAULT 0")
+    spec_cols = {row["name"] for row in db.execute("PRAGMA table_info(specs)")}
+    if "name" not in spec_cols:
+        db.execute("ALTER TABLE specs ADD COLUMN name TEXT NOT NULL DEFAULT ''")
+    db.execute("UPDATE specs SET name = 'Спецификация ' || version WHERE TRIM(COALESCE(name, '')) = ''")
+    db.execute("INSERT OR IGNORE INTO settings(key, value) VALUES ('loader_rate', '6000')")
 
 
 def now():

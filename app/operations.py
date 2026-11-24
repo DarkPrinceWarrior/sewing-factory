@@ -125,6 +125,11 @@ def latest_spec(db, item_id, day):
     return spec
 
 
+def loader_rate(db):
+    row = record(db, "SELECT value FROM settings WHERE key = 'loader_rate'")
+    return int(row["value"]) if row else 6000
+
+
 def populate_report(db, doc_id, payload):
     seen = set()
     for row in payload.lines:
@@ -134,7 +139,12 @@ def populate_report(db, doc_id, payload):
         if payload.stage != "pack" and row.prepared:
             raise RuleViolation("Передача в упаковку доступна только в отчёте упаковки", 422)
         seen.add(item["id"])
-        spec = latest_spec(db, item["id"], payload.date)
+        if row.spec_id is not None:
+            spec = required(db, "specs", row.spec_id)
+            if spec["product_id"] != item["id"]:
+                raise RuleViolation("Выбранная спецификация не относится к этому изделию", 422)
+        else:
+            spec = latest_spec(db, item["id"], payload.date)
         rate = scalar(db, "SELECT amount FROM rates WHERE spec_id=? AND stage=?", (spec["id"], payload.stage))
         line = db.execute(
             "INSERT INTO lines(doc_id,item_id,quantity,spec_id,prepared) VALUES(?,?,?,?,?)",
@@ -156,6 +166,21 @@ def populate_report(db, doc_id, payload):
                 "INSERT INTO material_snapshots(line_id,item_id,norm,quantity) VALUES(?,?,?,?)",
                 (line, material["item_id"], material["quantity"], material["quantity"] * row.quantity),
             )
+    hourly_seen = set()
+    rate_per_hour = loader_rate(db)
+    for hw in payload.hourly_works:
+        person = required(db, "staff", hw.staff_id)
+        key = (hw.staff_id, hw.work_type)
+        if not person["active"] or key in hourly_seen:
+            raise RuleViolation("Укажите действующих сотрудников для почасовой работы без повторов", 422)
+        if person["hired_on"] > str(payload.date):
+            raise RuleViolation(f"{person['name']} ещё не работал на дату отчёта", 422)
+        hourly_seen.add(key)
+        amount = rounded(hw.minutes * rate_per_hour, 60)
+        db.execute(
+            "INSERT INTO hourly_works(doc_id,staff_id,work_type,minutes,hourly_rate,amount) VALUES(?,?,?,?,?,?)",
+            (doc_id, hw.staff_id, hw.work_type, hw.minutes, rate_per_hour, amount),
+        )
 
 
 def save_report(db, payload, actor, doc_id=None, at=None, historical=False, role=None):
@@ -176,6 +201,7 @@ def save_report(db, payload, actor, doc_id=None, at=None, historical=False, role
         db.execute("DELETE FROM assignments WHERE line_id IN (SELECT id FROM lines WHERE doc_id=?)", (doc_id,))
         db.execute("DELETE FROM material_snapshots WHERE line_id IN (SELECT id FROM lines WHERE doc_id=?)", (doc_id,))
         db.execute("DELETE FROM lines WHERE doc_id=?", (doc_id,))
+        db.execute("DELETE FROM hourly_works WHERE doc_id=?", (doc_id,))
         db.execute("UPDATE documents SET date=?,stage=?,shift=?,source_id=?,memo=?,updated_at=? WHERE id=?", (day,payload.stage,payload.shift,source_wh,payload.memo,at,doc_id))
         event(db, doc_id, actor, at, "updated")
     populate_report(db, doc_id, payload)
@@ -191,7 +217,14 @@ def post_report(db, doc_id, actor, at=None, historical=False):
         check_period(db, doc["date"])
     stage = doc["stage"]
     source_wh = doc["source_id"] or WAREHOUSES["raw"]
-    for line in doc_lines(db, doc_id):
+    lines = doc_lines(db, doc_id)
+    hourly = records(db, """
+        SELECT h.*,s.active FROM hourly_works h JOIN staff s ON s.id=h.staff_id WHERE h.doc_id=?""", (doc_id,))
+    if not lines and not hourly:
+        raise RuleViolation("Добавьте выработку или почасовую работу перед проведением")
+    if any(not h["active"] for h in hourly):
+        raise RuleViolation("В почасовой работе есть уволенный сотрудник")
+    for line in lines:
         item_id, quantity = line["item_id"], line["quantity"]
         workers = records(db, """
             SELECT a.*,s.active,s.stage FROM assignments a JOIN staff s ON s.id=a.staff_id WHERE line_id=?""", (line["id"],))
@@ -236,6 +269,10 @@ def correct_report(db, doc_id, actor, reason):
         ).lastrowid
         db.execute("INSERT INTO assignments(line_id,staff_id,quantity,rate) SELECT ?,staff_id,quantity,rate FROM assignments WHERE line_id=?", (new_line, line["id"]))
         db.execute("INSERT INTO material_snapshots(line_id,item_id,norm,quantity) SELECT ?,item_id,norm,quantity FROM material_snapshots WHERE line_id=?", (new_line, line["id"]))
+    db.execute(
+        "INSERT INTO hourly_works(doc_id,staff_id,work_type,minutes,hourly_rate,amount) SELECT ?,staff_id,work_type,minutes,hourly_rate,amount FROM hourly_works WHERE doc_id=?",
+        (replacement, doc_id),
+    )
     return replacement
 
 
@@ -342,7 +379,11 @@ def save_recipe(db, item_id, payload, effective=None):
         raise RuleViolation("Спецификация создаётся только для изделия", 422)
     effective = effective or today()
     version = scalar(db, "SELECT COALESCE(MAX(version),0)+1 FROM specs WHERE product_id=?", (item_id,))
-    sid = db.execute("INSERT INTO specs(product_id,version,effective) VALUES(?,?,?)", (item_id,version,effective)).lastrowid
+    spec_name = (getattr(payload, "spec_name", "") or "").strip() or f"Спецификация {version}"
+    sid = db.execute(
+        "INSERT INTO specs(product_id,version,effective,name) VALUES(?,?,?,?)",
+        (item_id, version, effective, spec_name),
+    ).lastrowid
     seen = set()
     for norm in payload.norms:
         material = required(db, "items", norm.item_id)

@@ -217,9 +217,12 @@ def test_duplicate_receipt_and_payroll_scope(client):
     payroll=client.get("/api/payroll",params=q).json()
     assert [r["id"] for r in payroll]==[59]
     rows=list(load_workbook(io.BytesIO(client.get("/api/payroll",params={**q,"xlsx":"true"}).content)).active.values)
-    assert len(rows)==2
+    assert len(rows)==3
+    assert list(rows[0])==["Сотрудник","Начисление, ₽","Проезд, ₽","Долг, ₽","Аванс, ₽","НДФЛ, ₽","Итого, ₽"]
+    assert rows[-1][0]=="Итого"
     login(client,"master")
-    assert client.get("/api/staff/59").json()["rows"]==[]
+    master_staff=client.get("/api/staff/59").json()
+    assert master_staff["rows"]==[] and master_staff["hourly_rows"]==[] and master_staff["summary"] is None
     assert client.get("/api/staff/59?xlsx=true").status_code==403
 
 
@@ -690,3 +693,195 @@ def test_profile_workspace_password_and_logout_for_all_roles(client):
     assert svg_res.status_code == 200
     assert "image/svg+xml" in svg_res.headers.get("content-type", "")
     assert "<svg" in svg_res.text
+
+
+def test_hourly_loader_work_and_loader_rate_settings(client):
+    login(client, "master")
+    assert client.put("/api/settings", json={"loader_rate": "80.00"}).status_code == 403
+    login(client, "moscow")
+    assert client.put("/api/settings", json={"loader_rate": "80.00"}).status_code == 403
+
+    ws = login(client, "oksana")
+    assert ws["settings"]["loader_rate"] == "6000"
+    cutter = next(p for p in ws["staff"] if p["stage"] == "cut" and p["active"])
+    packer = next(p for p in ws["staff"] if p["stage"] == "pack" and p["active"])
+
+    # Empty report with neither lines nor hourly_works rejected with 422
+    assert client.post("/api/reports", json={"date": today(), "stage": "pack", "lines": [], "hourly_works": []}).status_code == 422
+
+    # 1. Hourly-only report (30 min at 60 RUB/hr = 30 RUB = 3000 kopecks)
+    month_before = client.get(f"/api/month?month={today()[:7]}").json()["wages"]
+    ov_before = client.get(f"/api/overview?day={today()}").json()["wages"]
+    hourly_only = client.post("/api/reports?post=true", json={
+        "date": today(), "stage": "pack", "lines": [],
+        "hourly_works": [{"staff_id": cutter["id"], "minutes": 30, "work_type": "loader"}],
+    })
+    assert hourly_only.status_code == 200, hourly_only.text
+    hdoc = hourly_only.json()
+    assert hdoc["wages"] == 3000
+    assert hdoc["hourly_minutes"] == 30
+    assert hdoc["hourly_works"][0]["amount"] == 3000
+    assert client.get(f"/api/overview?day={today()}").json()["wages"] == ov_before + 3000
+    assert client.get(f"/api/month?month={today()[:7]}").json()["wages"] == month_before + 3000
+
+    # 2. Mixed report (cut work + packer as loader for 90 min = 90 RUB = 9000 kopecks)
+    mixed = client.post("/api/reports?post=true", json={
+        "date": today(), "stage": "cut",
+        "lines": [{"item_id": 100, "quantity": 2, "assignments": [{"staff_id": cutter["id"], "quantity": 2}]}],
+        "hourly_works": [{"staff_id": packer["id"], "minutes": 90, "work_type": "loader"}],
+    })
+    assert mixed.status_code == 200, mixed.text
+    mdoc = mixed.json()
+    piece_pay = mdoc["lines"][0]["assignments"][0]["rate"] * 2
+    assert mdoc["wages"] == piece_pay + 9000
+
+    # Staff detail includes hourly_rows & summary
+    packer_detail = client.get(f"/api/staff/{packer['id']}").json()
+    assert any(h["id"] == mdoc["id"] and h["minutes"] == 90 and h["amount"] == 9000 for h in packer_detail["hourly_rows"])
+    assert packer_detail["summary"]["hourly_amount"] >= 9000
+
+    # Correction copies hourly_works into replacement draft & removes corrected hourly wages from month
+    corr = client.post(f"/api/reports/{hdoc['id']}/correct", json={"reason": "Уточнение часов грузчика"})
+    assert corr.status_code == 200, corr.text
+    assert corr.json()["hourly_works"][0]["minutes"] == 30
+    assert client.get(f"/api/month?month={today()[:7]}").json()["wages"] == month_before + piece_pay + 9000
+
+    # Updating loader_rate via PUT /api/settings changes subsequent calculation
+    updated_settings = client.put("/api/settings", json={"loader_rate": "120.00"})
+    assert updated_settings.status_code == 200 and updated_settings.json()["loader_rate"] == "12000"
+    prev = client.post("/api/reports/preview", json={
+        "date": today(), "stage": "pack", "lines": [],
+        "hourly_works": [{"staff_id": packer["id"], "minutes": 45}],
+    })
+    assert prev.status_code == 200 and prev.json()["hourly_works"][0]["amount"] == 9000
+    assert client.put("/api/settings", json={"loader_rate": "60.00"}).status_code == 200
+
+
+def test_staff_travel_and_payroll_adjustments_and_executive_xlsx(client):
+    login(client, "oksana")
+    # Create staff with travel compensation (no production accrual yet!)
+    new_emp = client.post("/api/staff", json={
+        "name": "Тестовый Проездной", "stage": "pack", "position": "Упаковщик",
+        "hired_on": "2025-01-10", "active": True, "travel_eligible": True, "travel_amount": "2500.00",
+    })
+    assert new_emp.status_code == 200, new_emp.text
+    sid = new_emp.json()["id"]
+    all_staff = client.get("/api/staff").json()
+    emp_rec = next(s for s in all_staff if s["id"] == sid)
+    assert emp_rec["travel_eligible"] == 1 and emp_rec["travel_amount"] == 250000
+
+    # Employee with 0 accrual still appears in payroll because travel > 0
+    month_str = today()[:7]
+    start_str = f"{month_str}-01"
+    pay_rows = client.get("/api/payroll", params={"start": start_str, "end": today(), "search": "Проездной"}).json()
+    assert len(pay_rows) == 1
+    assert pay_rows[0]["accrual"] == 0 and pay_rows[0]["travel"] == 250000 and pay_rows[0]["net_total"] == 250000
+
+    # Save debt, advance, ndfl and travel override via PUT /api/payroll/adjustments
+    adj = client.put("/api/payroll/adjustments", json={
+        "month": month_str, "staff_id": sid, "travel": "3000.00",
+        "debt": "500.00", "advance": "1000.00", "ndfl": "390.00", "memo": "Проверка ведомости",
+    })
+    assert adj.status_code == 200, adj.text
+    row = adj.json()
+    assert row["travel"] == 300000 and row["debt"] == 50000 and row["advance"] == 100000 and row["ndfl"] == 39000
+    assert row["net_total"] == 300000 - 50000 - 100000 - 39000
+
+    # Verify executive 7-column Excel + bold footer totals + #,##0.00 format
+    res = client.get("/api/payroll", params={"start": start_str, "end": today(), "xlsx": "true"})
+    assert res.status_code == 200
+    wb = load_workbook(io.BytesIO(res.content), data_only=True)
+    ws_sheet = wb.active
+    rows = list(ws_sheet.values)
+    assert list(rows[0]) == ["Сотрудник", "Начисление, ₽", "Проезд, ₽", "Долг, ₽", "Аванс, ₽", "НДФЛ, ₽", "Итого, ₽"]
+    assert rows[-1][0] == "Итого"
+    assert ws_sheet.cell(row=ws_sheet.max_row, column=1).font.bold is True
+    assert ws_sheet.cell(row=ws_sheet.max_row, column=7).number_format == "#,##0.00"
+    for col_idx in range(1, 7):
+        expected_sum = round(sum(r[col_idx] for r in rows[1:-1]), 2)
+        assert round(rows[-1][col_idx], 2) == expected_sum
+
+    # Role guard: master & regional cannot access PUT /api/payroll/adjustments
+    login(client, "master")
+    assert client.put("/api/payroll/adjustments", json={"month": month_str, "staff_id": sid, "debt": "10"}).status_code == 403
+    login(client, "moscow")
+    assert client.put("/api/payroll/adjustments", json={"month": month_str, "staff_id": sid, "debt": "10"}).status_code == 403
+
+
+def test_named_specs_and_report_spec_selection(client):
+    ws = login(client, "oksana")
+    cutter = next(p for p in ws["staff"] if p["stage"] == "cut" and p["active"])
+    created = client.post("/api/catalog", json={
+        "sku": "SPEC-SEL-01", "name": "Пододеяльник тест", "size": "Евро", "category": "Постельное бельё",
+        "price": "1890.00", "spec_name": "Стандарт", "cut": "20.00", "sew": "60.00", "pack": "10.00",
+        "norms": [{"item_id": 1, "stage": "cut", "quantity": "2.000"}],
+    })
+    assert created.status_code == 200, created.text
+    pid = created.json()["id"]
+    spec1 = client.get(f"/api/catalog/{pid}").json()["versions"][0]
+    assert spec1["name"] == "Стандарт"
+
+    v2 = client.post(f"/api/catalog/{pid}/versions", json={
+        "spec_name": "Без полиэстера", "cut": "35.00", "sew": "70.00", "pack": "15.00",
+        "norms": [{"item_id": 2, "stage": "cut", "quantity": "2.500"}],
+    })
+    assert v2.status_code == 200, v2.text
+    spec2_id = v2.json()["id"]
+
+    # Workspace and GET /api/catalog return specs with names
+    ws2 = client.get("/api/workspace").json()
+    prod_specs = [s for s in ws2["specs"] if s["product_id"] == pid]
+    assert {s["name"] for s in prod_specs} == {"Стандарт", "Без полиэстера"}
+    cat = client.get("/api/catalog").json()
+    cat_item = next(i for i in cat["items"] if i["id"] == pid)
+    assert len(cat_item["specs"]) == 2
+
+    # Explicitly select older spec1 ("Стандарт") in a report -> uses spec1 norm (item 1) and rate (20 RUB)
+    rep = client.post("/api/reports?post=true", json={
+        "date": today(), "stage": "cut",
+        "lines": [{"item_id": pid, "quantity": 3, "spec_id": spec1["id"], "assignments": [{"staff_id": cutter["id"], "quantity": 3}]}],
+    })
+    assert rep.status_code == 200, rep.text
+    rdoc = rep.json()
+    assert rdoc["lines"][0]["spec_id"] == spec1["id"]
+    assert rdoc["lines"][0]["spec_name"] == "Стандарт"
+    assert rdoc["lines"][0]["materials"][0]["item_id"] == 1
+    assert rdoc["wages"] == 6000
+
+    # Selecting another product's spec fails with 422
+    other_spec = next(s["id"] for s in ws2["specs"] if s["product_id"] == 100)
+    bad = client.post("/api/reports/preview", json={
+        "date": today(), "stage": "cut",
+        "lines": [{"item_id": pid, "quantity": 1, "spec_id": other_spec}],
+    })
+    assert bad.status_code == 422
+    assert spec2_id != spec1["id"]
+
+
+def test_idempotent_migration_on_existing_db_copy(tmp_path):
+    import sqlite3
+    from contextlib import closing
+    from app.db import ROOT, SCHEMA, migrate
+
+    live_db = ROOT / "data" / "factory.sqlite3"
+    copy_db = tmp_path / "factory_copy.sqlite3"
+    if live_db.exists():
+        with closing(sqlite3.connect(f"file:{live_db}?mode=ro", uri=True)) as src:
+            with closing(sqlite3.connect(copy_db)) as dst:
+                src.backup(dst)
+        with closing(sqlite3.connect(copy_db)) as db:
+            db.row_factory = sqlite3.Row
+            docs_before = db.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            moves_before = db.execute("SELECT COUNT(*) FROM movements").fetchone()[0]
+            db.executescript(SCHEMA)
+            migrate(db)
+            migrate(db)  # Idempotent second run
+            db.commit()
+            assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == docs_before
+            assert db.execute("SELECT COUNT(*) FROM movements").fetchone()[0] == moves_before
+            assert db.execute("SELECT value FROM settings WHERE key='loader_rate'").fetchone()[0] == "6000"
+            assert db.execute("SELECT COUNT(*) FROM specs WHERE TRIM(name)=''").fetchone()[0] == 0
+            staff_cols = {r["name"] for r in db.execute("PRAGMA table_info(staff)")}
+            assert {"travel_eligible", "travel_amount"}.issubset(staff_cols)
+            tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            assert {"hourly_works", "payroll_adjustments"}.issubset(tables)

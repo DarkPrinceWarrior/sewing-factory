@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 Short = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=180)]
 Memo = Annotated[str, Field(max_length=500)]
@@ -27,10 +27,17 @@ class Assignment(BaseModel):
     quantity: Annotated[int, Field(gt=0, le=100_000)]
 
 
+class HourlyWork(BaseModel):
+    staff_id: Id
+    minutes: Annotated[int, Field(ge=1, le=1440)]
+    work_type: Literal["loader"] = "loader"
+
+
 class WorkLine(BaseModel):
     item_id: Id
     quantity: Annotated[int, Field(gt=0, le=100_000)]
     prepared: Annotated[int, Field(ge=0, le=100_000)] = 0
+    spec_id: Id | None = None
     assignments: Annotated[list[Assignment], Field(max_length=100)] = []
 
 
@@ -40,7 +47,14 @@ class Report(BaseModel):
     shift: Literal["day", "evening", "night"] = "day"
     source_id: Id | None = None
     memo: Memo = ""
-    lines: Annotated[list[WorkLine], Field(min_length=1, max_length=100)]
+    lines: Annotated[list[WorkLine], Field(max_length=100)] = []
+    hourly_works: Annotated[list[HourlyWork], Field(max_length=100)] = []
+
+    @model_validator(mode="after")
+    def require_work(self):
+        if not self.lines and not self.hourly_works:
+            raise ValueError("Добавьте хотя бы одну строку выработки или почасовую работу")
+        return self
 
 
 class ItemLine(BaseModel):
@@ -93,6 +107,22 @@ class Staff(BaseModel):
     position: Short
     hired_on: date
     active: bool = True
+    travel_eligible: bool = False
+    travel_amount: Money = Decimal("0")
+
+
+class PayrollAdjustment(BaseModel):
+    month: Annotated[str, Field(pattern=r"^20\d\d-(0[1-9]|1[0-2])$")]
+    staff_id: Id
+    travel: Money | None = None
+    debt: Money = Decimal("0")
+    advance: Money = Decimal("0")
+    ndfl: Money = Decimal("0")
+    memo: Memo = ""
+
+
+class SettingsUpdate(BaseModel):
+    loader_rate: Money | None = None
 
 
 class Access(BaseModel):
@@ -109,6 +139,7 @@ class MaterialNorm(BaseModel):
 
 
 class Recipe(BaseModel):
+    spec_name: Annotated[str, StringConstraints(strip_whitespace=True, max_length=120)] = ""
     norms: Annotated[list[MaterialNorm], Field(max_length=120)] = []
     cut: Money
     sew: Money

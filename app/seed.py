@@ -92,9 +92,15 @@ def seed(db):
         people.extend((f"{first} {LAST[(j+i*5)%16]}", stage, position) for j, first in enumerate(FIRST))
     people += [("Арен Мартиросян","cut","Закройщик"),("Манвел Саркисян","sew","Швея"),("Ситора Каримова","pack","Упаковщик"),("Фарид Хамиди","cut","Закройщик"),("Лейла Юсупова","pack","Упаковщик"),
                ("Павел Белов","warehouse","Кладовщик"),("Виктория Громова","warehouse","Кладовщик"),("Андрей Жуков","office","Технолог")]
+    travel_staff = {8, 10, 12, 16, 20, 25, 29, 34, 40, 44, 48, 52, 56, 58, 59}
     for i, (name, stage, position) in enumerate(people,1):
         signed = start - timedelta(days=random.randint(50, 900))
-        db.execute("INSERT INTO staff VALUES(?,?,?,?,?,1)", (i,name,stage,position,str(signed)))
+        eligible = 1 if i in travel_staff else 0
+        travel_amt = (300000 if i % 2 == 0 else 250000) if eligible else 0
+        db.execute(
+            "INSERT INTO staff(id,name,stage,position,hired_on,active,travel_eligible,travel_amount) VALUES(?,?,?,?,?,1,?,?)",
+            (i,name,stage,position,str(signed),eligible,travel_amt),
+        )
         if i > 55 and stage in workers:
             workers[stage].append(i)
     accounts = [
@@ -124,10 +130,11 @@ def seed(db):
                 {"item_id":7,"stage":"sew","quantity":1},{"item_id":8,"stage":"sew","quantity":1},
                 {"item_id":9,"stage":"pack","quantity":1},{"item_id":10,"stage":"pack","quantity":1},
             ]
+            spec_names = {1: "Стандарт", 2: "Уточнённые нормы", 3: "Актуальная"}
             for version, effective in [(1,str(start)), (2,"2025-07-01"), (3,"2026-03-01")]:
                 if effective < str(start) or effective > str(end):
                     continue
-                recipe = Recipe(norms=norms,cut=18+sx+2*(version-1),sew=65+sx*5+ix+2*(version-1),pack=8+version-1)
+                recipe = Recipe(spec_name=spec_names[version],norms=norms,cut=18+sx+2*(version-1),sew=65+sx*5+ix+2*(version-1),pack=8+version-1)
                 save_recipe(db,pid,recipe,effective)
     opening = new_document(db,"opening",str(start),1,timestamp(start,7),memo="Остатки по инвентаризации на начало учёта")
     for mid,(_,unit,_,price) in enumerate(MATERIALS,1):
@@ -213,4 +220,28 @@ def seed(db):
     while month <= end:
         db.execute("INSERT INTO overhead VALUES(?,?,?)",(str(month)[:7],random.randint(85_000,165_000)*100,"Электроэнергия, обслуживание оборудования и расходы цехов"))
         month=(month+timedelta(days=32)).replace(day=1)
-    db.executemany("INSERT INTO settings VALUES(?,?)", [("seeded","1"),("open_month",str(end)[:7]),("company","Швейная фабрика"),("language","Русский")])
+    open_m = str(end)[:7]
+    recent_reports = [row[0] for row in db.execute(
+        "SELECT id FROM documents WHERE kind='report' AND status='posted' AND date>=? ORDER BY date DESC, id DESC LIMIT 4",
+        (open_m + "-01",),
+    )]
+    for doc_id, (sid, mins) in zip(recent_reports, [(40, 90), (58, 60), (44, 120), (59, 30)]):
+        db.execute(
+            "INSERT OR IGNORE INTO hourly_works(doc_id,staff_id,work_type,minutes,hourly_rate,amount) VALUES(?,?,'loader',?,6000,?)",
+            (doc_id, sid, mins, mins * 100),
+        )
+    for sid, trv, debt, adv, ndfl, memo in [
+        (8, None, 150000, 300000, 260000, "Аванс и досрочная выдача"),
+        (25, None, 0, 500000, 310000, "Плановый аванс"),
+        (40, 300000, 100000, 400000, 240000, "Проезд и удержания"),
+        (56, None, 200000, 0, 195000, "Взял часть зарплаты раньше"),
+        (59, None, 0, 250000, 210000, "Аванс и НДФЛ"),
+    ]:
+        db.execute(
+            "INSERT OR IGNORE INTO payroll_adjustments(month,staff_id,travel,debt,advance,ndfl,memo,updated_at,updated_by) VALUES(?,?,?,?,?,?,?,?,2)",
+            (open_m, sid, trv, debt, adv, ndfl, memo, timestamp(end, 18, 0)),
+        )
+    db.executemany(
+        "INSERT OR IGNORE INTO settings VALUES(?,?)",
+        [("seeded","1"),("open_month",open_m),("company","Швейная фабрика"),("language","Русский"),("loader_rate","6000")],
+    )
